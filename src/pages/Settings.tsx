@@ -35,34 +35,59 @@ export default function Settings() {
         const adminStatus = await isAdmin();
         setUserIsAdmin(adminStatus);
         
+        // Get current user
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          setError('No authenticated user found');
+          setLoading(false);
+          return;
+        }
+        
         // Load Voiceflow mappings
-        const mapping = await getVoiceflowMappingByUserId('');
-        if (mapping) {
-          setVoiceflowMappings([mapping]);
-          setVoiceflowProjectId(mapping.vf_project_id);
-          
-          // Load knowledge base for the mapping
-          try {
-            const kb = await getVoiceflowKnowledgeBase(mapping.vf_project_id);
-            setKnowledgeBase(kb);
-          } catch (kbError) {
-            console.error('Error loading knowledge base:', kbError);
+        try {
+          const mapping = await getVoiceflowMappingByUserId(user.id);
+          if (mapping) {
+            setVoiceflowMappings([mapping]);
+            setVoiceflowProjectId(mapping.vf_project_id);
+            
+            // Load knowledge base for the mapping
+            try {
+              const kb = await getVoiceflowKnowledgeBase(mapping.vf_project_id);
+              setKnowledgeBase(kb);
+            } catch (kbError) {
+              console.error('Error loading knowledge base:', kbError);
+            }
           }
+        } catch (mappingError) {
+          console.error('Error loading Voiceflow mapping:', mappingError);
+          // Don't fail completely if just the mapping fails
         }
         
         // Load social connections
-        const connections = await getSocialConnections();
-        setSocialConnections(connections);
+        try {
+          const connections = await getSocialConnections();
+          setSocialConnections(connections);
+        } catch (connectionsError) {
+          console.error('Error loading social connections:', connectionsError);
+          // Don't fail completely if just connections fail
+        }
         
         // Load webhook configs
-        const webhooks = await getWebhookConfigsByUserId('');
-        setWebhookConfigs(webhooks);
+        try {
+          const webhooks = await getWebhookConfigsByUserId(user.id);
+          setWebhookConfigs(webhooks);
+        } catch (webhooksError) {
+          console.error('Error loading webhook configs:', webhooksError);
+          // Don't fail completely if just webhooks fail
+        }
         
         // Load token refresh history
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
+        try {
           const history = await getTokenRefreshHistory(user.id);
           setRefreshHistory(history);
+        } catch (historyError) {
+          console.error('Error loading token refresh history:', historyError);
+          // Don't fail completely if just history fails
         }
       } catch (error) {
         console.error('Error loading data:', error);
