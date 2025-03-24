@@ -56,66 +56,97 @@ export default function AdminUserDetail() {
   const [apiKeySaved, setApiKeySaved] = useState(false);
   
   useEffect(() => {
-    if (!userId) return;
+    if (!userId) {
+      setError("User ID is missing");
+      setLoading(false);
+      return;
+    }
     
     loadUserData();
   }, [userId]);
   
   const loadUserData = async () => {
+    if (!userId) return;
+    
     try {
       setLoading(true);
       setError(null);
       
       // Load user data
-      const user = await getUserById(userId!);
+      const user = await getUserById(userId);
       setUserData(user);
-      setSelectedRole(user.role || 'customer');
+      setSelectedRole(user?.role || 'customer');
       
       // Load Voiceflow mapping
-      const vfMapping = await getVoiceflowMappingByUserId(userId!);
-      setVoiceflowMapping(vfMapping);
-      if (vfMapping) {
-        setVoiceflowProjectId(vfMapping.vf_project_id);
+      try {
+        const vfMapping = await getVoiceflowMappingByUserId(userId);
+        setVoiceflowMapping(vfMapping);
+        if (vfMapping) {
+          setVoiceflowProjectId(vfMapping.vf_project_id);
+        }
+      } catch (err) {
+        console.error('Error loading Voiceflow mapping:', err);
+        // Don't fail completely if just this data fails
       }
       
       // Load Voiceflow API key
-      const apiKey = await getVoiceflowApiKeyByUserId(userId!);
-      setVoiceflowApiKey(apiKey);
-      if (apiKey) {
-        setApiKeyValue(apiKey.api_key);
+      try {
+        const apiKey = await getVoiceflowApiKeyByUserId(userId);
+        setVoiceflowApiKey(apiKey);
+        if (apiKey) {
+          setApiKeyValue(apiKey.api_key);
+        }
+      } catch (err) {
+        console.error('Error loading Voiceflow API key:', err);
+        // Don't fail completely if just this data fails
       }
       
       // Load webhook configs
-      const webhooks = await getWebhookConfigsByUserId(userId!);
-      setWebhookConfigs(webhooks);
-      
-      // Initialize Facebook webhook form fields
-      const fbWebhook = webhooks.find(w => w.platform === 'facebook');
-      if (fbWebhook) {
-        setFbWebhookUrl(fbWebhook.webhook_url || '');
-        setFbVerificationToken(fbWebhook.verification_token || '');
-        setFbGeneratedUrl(fbWebhook.generated_url || '');
-        setFbWebhookName(fbWebhook.webhook_name || '');
-        setIsFbWebhookActive(fbWebhook.is_active);
-      }
-      
-      // Initialize Instagram webhook form fields
-      const igWebhook = webhooks.find(w => w.platform === 'instagram');
-      if (igWebhook) {
-        setIgWebhookUrl(igWebhook.webhook_url || '');
-        setIgVerificationToken(igWebhook.verification_token || '');
-        setIgGeneratedUrl(igWebhook.generated_url || '');
-        setIgWebhookName(igWebhook.webhook_name || '');
-        setIsIgWebhookActive(igWebhook.is_active);
+      try {
+        const webhooks = await getWebhookConfigsByUserId(userId);
+        setWebhookConfigs(webhooks);
+        
+        // Initialize Facebook webhook form fields
+        const fbWebhook = webhooks.find(w => w.platform === 'facebook');
+        if (fbWebhook) {
+          setFbWebhookUrl(fbWebhook.webhook_url || '');
+          setFbVerificationToken(fbWebhook.verification_token || '');
+          setFbGeneratedUrl(fbWebhook.generated_url || '');
+          setFbWebhookName(fbWebhook.webhook_name || '');
+          setIsFbWebhookActive(fbWebhook.is_active);
+        }
+        
+        // Initialize Instagram webhook form fields
+        const igWebhook = webhooks.find(w => w.platform === 'instagram');
+        if (igWebhook) {
+          setIgWebhookUrl(igWebhook.webhook_url || '');
+          setIgVerificationToken(igWebhook.verification_token || '');
+          setIgGeneratedUrl(igWebhook.generated_url || '');
+          setIgWebhookName(igWebhook.webhook_name || '');
+          setIsIgWebhookActive(igWebhook.is_active);
+        }
+      } catch (err) {
+        console.error('Error loading webhook configs:', err);
+        // Don't fail completely if just this data fails
       }
       
       // Load social connections
-      const connections = await getSocialConnectionsByUserId(userId!);
-      setSocialConnections(connections);
+      try {
+        const connections = await getSocialConnectionsByUserId(userId);
+        setSocialConnections(connections);
+      } catch (err) {
+        console.error('Error loading social connections:', err);
+        // Don't fail completely if just this data fails
+      }
       
       // Load conversations
-      const userConversations = await getConversationsByUserId(userId!);
-      setConversations(userConversations);
+      try {
+        const userConversations = await getConversationsByUserId(userId);
+        setConversations(userConversations);
+      } catch (err) {
+        console.error('Error loading conversations:', err);
+        // Don't fail completely if just this data fails
+      }
       
     } catch (err) {
       console.error('Error loading user data:', err);
@@ -336,6 +367,8 @@ export default function AdminUserDetail() {
   };
   
   const generateFacebookWebhookUrl = () => {
+    if (!userId) return;
+    
     const baseUrl = window.location.origin;
     const timestamp = Date.now();
     const generatedUrl = `${baseUrl}/api/webhooks/${userId}/facebook/${timestamp}`;
@@ -343,6 +376,8 @@ export default function AdminUserDetail() {
   };
   
   const generateInstagramWebhookUrl = () => {
+    if (!userId) return;
+    
     const baseUrl = window.location.origin;
     const timestamp = Date.now();
     const generatedUrl = `${baseUrl}/api/webhooks/${userId}/instagram/${timestamp}`;
