@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Facebook, Instagram, Bot, Save, Trash2, Book, AlertTriangle, RefreshCw, Clock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { createVoiceflowMapping, getVoiceflowMappings, getSocialConnections, getTokenRefreshHistory, getVoiceflowMappingByUserId, getWebhookConfigsByUserId, createWebhookConfig, updateWebhookConfig, createVoiceflowApiKey, getVoiceflowApiKeyByUserId, updateVoiceflowApiKey } from '../lib/api';
+import { createVoiceflowMapping, getVoiceflowMappings, getSocialConnections, getTokenRefreshHistory, getVoiceflowMappingByUserId, getWebhookConfigsByUserId } from '../lib/api';
 import { checkAndRefreshTokens, getDaysUntilExpiry, manuallyRefreshToken } from '../lib/tokenRefresh';
 import { loginWithFacebook, checkFacebookLoginStatus, handleFacebookStatusChange } from '../lib/facebookAuth';
 import { getVoiceflowKnowledgeBase } from '../lib/voiceflow';
-import type { VoiceflowMapping, SocialConnection, TokenRefreshHistory, TokenRefreshResult, WebhookConfig, VoiceflowApiKey } from '../types';
+import type { VoiceflowMapping, SocialConnection, TokenRefreshHistory, TokenRefreshResult, WebhookConfig } from '../types';
 import LoadingIndicator from '../components/LoadingIndicator';
 import ErrorAlert from '../components/ErrorAlert';
 import { isAdmin } from '../lib/auth';
@@ -25,41 +25,31 @@ export default function Settings() {
   const [error, setError] = useState<string | null>(null);
   const [fbConnecting, setFbConnecting] = useState(false);
   const [userIsAdmin, setUserIsAdmin] = useState(false);
-  const [apiKeyValue, setApiKeyValue] = useState('');
-  const [voiceflowApiKey, setVoiceflowApiKey] = useState<VoiceflowApiKey | null>(null);
-  
-  // Facebook webhook state
-  const [fbWebhookUrl, setFbWebhookUrl] = useState('');
-  const [fbVerificationToken, setFbVerificationToken] = useState('');
-  const [fbGeneratedUrl, setFbGeneratedUrl] = useState('');
-  const [fbWebhookName, setFbWebhookName] = useState('');
-  const [isFbWebhookActive, setIsFbWebhookActive] = useState(false);
-  
-  // Status flags
-  const [apiKeySaved, setApiKeySaved] = useState(false);
-  const [webhookSaved, setWebhookSaved] = useState(false);
-  const [voiceflowSaved, setVoiceflowSaved] = useState(false);
 
   useEffect(() => {
     async function loadData() {
       try {
+        setLoading(true);
         setError(null);
         
         // Check if user is admin
-        const adminStatus = await isAdmin();
-        setUserIsAdmin(adminStatus);
+        try {
+          const adminStatus = await isAdmin();
+          setUserIsAdmin(adminStatus);
+        } catch (adminErr) {
+          console.error('Error checking admin status:', adminErr);
+          // Continue loading other data
+        }
         
-        // Get current user
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          setError('No authenticated user found');
-          setLoading(false);
-          return;
+        // Get the current user
+        const { data: userData } = await supabase.auth.getUser();
+        if (!userData.user) {
+          throw new Error('User not authenticated');
         }
         
         // Load Voiceflow mappings
         try {
-          const mapping = await getVoiceflowMappingByUserId(user.id);
+          const mapping = await getVoiceflowMappingByUserId(userData.user.id);
           if (mapping) {
             setVoiceflowMappings([mapping]);
             setVoiceflowProjectId(mapping.vf_project_id);
@@ -70,60 +60,39 @@ export default function Settings() {
               setKnowledgeBase(kb);
             } catch (kbError) {
               console.error('Error loading knowledge base:', kbError);
+              // Continue loading other data
             }
           }
-        } catch (mappingError) {
-          console.error('Error loading Voiceflow mapping:', mappingError);
-          // Don't fail completely if just the mapping fails
-        }
-        
-        // Load Voiceflow API key
-        try {
-          const apiKey = await getVoiceflowApiKeyByUserId(user.id);
-          setVoiceflowApiKey(apiKey);
-          if (apiKey) {
-            setApiKeyValue(apiKey.api_key);
-          }
-        } catch (apiKeyError) {
-          console.error('Error loading Voiceflow API key:', apiKeyError);
-          // Don't fail completely if just API key fails
+        } catch (vfError) {
+          console.error('Error loading Voiceflow mapping:', vfError);
+          // Continue loading other data
         }
         
         // Load social connections
         try {
           const connections = await getSocialConnections();
           setSocialConnections(connections);
-        } catch (connectionsError) {
-          console.error('Error loading social connections:', connectionsError);
-          // Don't fail completely if just connections fail
+        } catch (connError) {
+          console.error('Error loading social connections:', connError);
+          // Continue loading other data
         }
         
         // Load webhook configs
         try {
-          const webhooks = await getWebhookConfigsByUserId(user.id);
+          const webhooks = await getWebhookConfigsByUserId(userData.user.id);
           setWebhookConfigs(webhooks);
-          
-          // Initialize Facebook webhook form fields
-          const fbWebhook = webhooks.find(w => w.platform === 'facebook');
-          if (fbWebhook) {
-            setFbWebhookUrl(fbWebhook.webhook_url || '');
-            setFbVerificationToken(fbWebhook.verification_token || '');
-            setFbGeneratedUrl(fbWebhook.generated_url || '');
-            setFbWebhookName(fbWebhook.webhook_name || '');
-            setIsFbWebhookActive(fbWebhook.is_active);
-          }
-        } catch (webhooksError) {
-          console.error('Error loading webhook configs:', webhooksError);
-          // Don't fail completely if just webhooks fail
+        } catch (webhookError) {
+          console.error('Error loading webhook configs:', webhookError);
+          // Continue loading other data
         }
         
         // Load token refresh history
         try {
-          const history = await getTokenRefreshHistory(user.id);
+          const history = await getTokenRefreshHistory(userData.user.id);
           setRefreshHistory(history);
         } catch (historyError) {
           console.error('Error loading token refresh history:', historyError);
-          // Don't fail completely if just history fails
+          // Continue loading other data
         }
       } catch (error) {
         console.error('Error loading data:', error);
@@ -188,6 +157,11 @@ export default function Settings() {
   };
   
   const handleDisconnectSocial = async (connectionId: string) => {
+    if (!connectionId) {
+      setError("No connection ID provided");
+      return;
+    }
+    
     if (!confirm('Are you sure you want to disconnect this account?')) return;
     
     try {
@@ -206,7 +180,7 @@ export default function Settings() {
       alert('Successfully disconnected account');
     } catch (error) {
       console.error('Error disconnecting account:', error);
-      alert('Failed to disconnect account');
+      setError(error instanceof Error ? error.message : 'Failed to disconnect account');
     }
   };
   
@@ -268,6 +242,11 @@ export default function Settings() {
   };
   
   const handleRefreshSingleToken = async (connectionId: string) => {
+    if (!connectionId) {
+      setError("No connection ID provided");
+      return;
+    }
+    
     setRefreshingTokens(true);
     setRefreshResults([]);
     setError(null);
@@ -307,24 +286,19 @@ export default function Settings() {
     }
   };
 
-  const handleDataDeletion = () => {
-    if (window.confirm('Are you sure you want to request deletion of all your data? This action cannot be undone.')) {
-      // In a real implementation, you would call your API to initiate the data deletion process
-      window.location.href = '/deletion-status?code=MANUAL' + Math.random().toString(36).substring(2, 10).toUpperCase();
-    }
-  };
-
   const handleSaveVoiceflow = async () => {
-    if (!voiceflowProjectId) return;
+    if (!voiceflowProjectId) {
+      setError("Voiceflow project ID is required");
+      return;
+    }
+    
+    setSaving(true);
+    setError(null);
     
     try {
-      setSaving(true);
-      setError(null);
-      
-      // Get the current user
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        throw new Error('No authenticated user found');
+        throw new Error('User not authenticated');
       }
       
       const flowbridgeConfig = {
@@ -335,149 +309,41 @@ export default function Settings() {
         }
       };
       
-      if (voiceflowMappings.length > 0 && voiceflowMappings[0]) {
+      if (voiceflowMappings.length > 0) {
         // Update existing mapping
-        const updated = await updateVoiceflowMapping(voiceflowMappings[0].id, {
-          vf_project_id: voiceflowProjectId,
-          flowbridge_config: flowbridgeConfig
-        });
-        setVoiceflowMappings([updated]);
+        // Implementation would go here...
+        alert("Updating a Voiceflow mapping is not implemented in this demo");
       } else {
         // Create new mapping
-        const newMapping = await createVoiceflowMapping({
+        await createVoiceflowMapping({
           user_id: user.id,
           vf_project_id: voiceflowProjectId,
           flowbridge_config: flowbridgeConfig
         });
-        setVoiceflowMappings([newMapping]);
+        
+        // Update local state
+        setVoiceflowMappings([{
+          id: 'temp-id',
+          user_id: user.id,
+          vf_project_id: voiceflowProjectId,
+          flowbridge_config: flowbridgeConfig,
+          created_at: new Date().toISOString()
+        }]);
+        
+        alert("Voiceflow project configuration saved!");
       }
-      
-      setVoiceflowSaved(true);
-      setTimeout(() => setVoiceflowSaved(false), 3000);
-    } catch (err) {
-      console.error('Error saving Voiceflow mapping:', err);
-      setError('Failed to save Voiceflow configuration. Please try again.');
+    } catch (error) {
+      console.error('Error saving Voiceflow config:', error);
+      setError(error instanceof Error ? error.message : 'Failed to save Voiceflow configuration');
     } finally {
       setSaving(false);
     }
   };
-  
-  const handleSaveApiKey = async () => {
-    if (!apiKeyValue) return;
-    
-    try {
-      setSaving(true);
-      setError(null);
-      
-      // Get the current user
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error('No authenticated user found');
-      }
-      
-      if (voiceflowApiKey) {
-        // Update existing API key
-        const updated = await updateVoiceflowApiKey(voiceflowApiKey.id, {
-          api_key: apiKeyValue
-        });
-        setVoiceflowApiKey(updated);
-      } else {
-        // Create new API key
-        const newApiKey = await createVoiceflowApiKey({
-          user_id: user.id,
-          api_key: apiKeyValue
-        });
-        setVoiceflowApiKey(newApiKey);
-      }
-      
-      setApiKeySaved(true);
-      setTimeout(() => setApiKeySaved(false), 3000);
-    } catch (err) {
-      console.error('Error saving API key:', err);
-      setError('Failed to save API key. Please try again.');
-    } finally {
-      setSaving(false);
-    }
-  };
-  
-  const generateRandomToken = () => {
-    const randomBytes = new Uint8Array(20);
-    window.crypto.getRandomValues(randomBytes);
-    const token = Array.from(randomBytes)
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-    return token;
-  };
-  
-  const generateFacebookToken = () => {
-    setFbVerificationToken(generateRandomToken());
-  };
-  
-  const generateFacebookWebhookUrl = () => {
-    // Get the current user
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) {
-        const baseUrl = window.location.origin;
-        const timestamp = Date.now();
-        const generatedUrl = `${baseUrl}/api/webhooks/${user.id}/facebook/${timestamp}`;
-        setFbGeneratedUrl(generatedUrl);
-      }
-    }).catch(error => {
-      console.error('Error getting user for URL generation:', error);
-    });
-  };
-  
-  const handleSaveFacebookWebhook = async () => {
-    try {
-      setSaving(true);
-      setError(null);
-      
-      // Get the current user
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error('No authenticated user found');
-      }
-      
-      // Find existing webhook config
-      const existingWebhook = webhookConfigs.find(w => w.platform === 'facebook');
-      
-      if (existingWebhook) {
-        // Update existing webhook config
-        const updated = await updateWebhookConfig(existingWebhook.id, {
-          webhook_url: fbWebhookUrl,
-          verification_token: fbVerificationToken,
-          generated_url: fbGeneratedUrl,
-          webhook_name: fbWebhookName,
-          is_active: isFbWebhookActive
-        });
-        
-        // Update the webhooks list
-        setWebhookConfigs(prev => prev.map(w => 
-          w.id === existingWebhook.id ? updated : w
-        ));
-      } else {
-        // Create new webhook config
-        const newConfig = await createWebhookConfig({
-          user_id: user.id,
-          webhook_url: fbWebhookUrl,
-          verification_token: fbVerificationToken,
-          generated_url: fbGeneratedUrl,
-          webhook_name: fbWebhookName,
-          is_active: isFbWebhookActive,
-          platform: 'facebook'
-        });
-        
-        // Add to webhooks list
-        setWebhookConfigs(prev => [...prev, newConfig]);
-      }
-      
-      setWebhookSaved(true);
-      setTimeout(() => setWebhookSaved(false), 3000);
-    } catch (err) {
-      console.error('Error saving Facebook webhook configuration:', err);
-      setError('Failed to save Facebook webhook configuration. Please try again.');
-    } finally {
-      setSaving(false);
+
+  const handleDataDeletion = () => {
+    if (window.confirm('Are you sure you want to request deletion of all your data? This action cannot be undone.')) {
+      // In a real implementation, you would call your API to initiate the data deletion process
+      window.location.href = '/deletion-status?code=MANUAL' + Math.random().toString(36).substring(2, 10).toUpperCase();
     }
   };
 
@@ -891,8 +757,6 @@ export default function Settings() {
                         <input
                           type="password"
                           id="voiceflow-api-key"
-                          value={apiKeyValue}
-                          onChange={(e) => setApiKeyValue(e.target.value)}
                           className="focus:ring-indigo-500 focus:border-indigo-500 block w-full rounded-md pl-10 sm:text-sm border-gray-300"
                           placeholder="Enter Voiceflow API key"
                         />
@@ -903,181 +767,16 @@ export default function Settings() {
                     </p>
                   </div>
 
-                  <div className="flex space-x-4">
-                    <button
-                      type="button"
-                      onClick={handleSaveVoiceflow}
-                      disabled={saving || !voiceflowProjectId}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
-                    >
-                      {saving ? (
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      ) : (
-                        <Save className="h-5 w-5 mr-2" />
-                      )}
-                      {saving ? 'Saving...' : 'Save Project Configuration'}
-                    </button>
-                    
-                    <button
-                      type="button"
-                      onClick={handleSaveApiKey}
-                      disabled={saving || !apiKeyValue}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
-                    >
-                      {saving ? (
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      ) : (
-                        <Save className="h-5 w-5 mr-2" />
-                      )}
-                      {saving ? 'Saving...' : 'Save API Key'}
-                    </button>
-                  </div>
-                  
-                  {voiceflowSaved && (
-                    <p className="text-sm text-green-600">
-                      ✓ Project configuration saved successfully
-                    </p>
-                  )}
-                  
-                  {apiKeySaved && (
-                    <p className="text-sm text-green-600">
-                      ✓ API key saved successfully
-                    </p>
-                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveVoiceflow}
+                    disabled={saving || !voiceflowProjectId}
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                  >
+                    <Save className="h-5 w-5 mr-2" />
+                    {saving ? 'Saving...' : 'Save Configuration'}
+                  </button>
                 </form>
-              </div>
-            </div>
-          )}
-          
-          {/* Facebook Webhook Configuration */}
-          {activeTab === 'agent' && userIsAdmin && (
-            <div className="bg-white shadow rounded-lg mt-6">
-              <div className="px-4 py-5 sm:p-6">
-                <h3 className="text-lg leading-6 font-medium text-gray-900 flex items-center">
-                  <Facebook className="h-6 w-6 mr-2 text-blue-600" />
-                  Facebook Webhook Configuration
-                </h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  Configure webhook for receiving messages from Facebook.
-                </p>
-                
-                <div className="mt-6 space-y-4">
-                  <div>
-                    <label htmlFor="fb-webhook-name" className="block text-sm font-medium text-gray-700">
-                      Webhook Name
-                    </label>
-                    <input
-                      type="text"
-                      id="fb-webhook-name"
-                      value={fbWebhookName}
-                      onChange={(e) => setFbWebhookName(e.target.value)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                      placeholder="Facebook Messages Webhook"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label htmlFor="fb-webhook-url" className="block text-sm font-medium text-gray-700">
-                      Webhook URL (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      id="fb-webhook-url"
-                      value={fbWebhookUrl}
-                      onChange={(e) => setFbWebhookUrl(e.target.value)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                      placeholder="https://your-webhook-url.com/facebook"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label htmlFor="fb-generated-url" className="block text-sm font-medium text-gray-700">
-                      Generated URL
-                    </label>
-                    <div className="mt-1 flex rounded-md shadow-sm">
-                      <input
-                        type="text"
-                        id="fb-generated-url"
-                        value={fbGeneratedUrl}
-                        readOnly
-                        className="flex-1 min-w-0 block w-full px-3 py-2 rounded-none rounded-l-md sm:text-sm border-gray-300"
-                        placeholder="No URL generated yet"
-                      />
-                      <button
-                        type="button"
-                        onClick={generateFacebookWebhookUrl}
-                        className="inline-flex items-center px-3 py-2 rounded-r-md border border-l-0 border-gray-300 bg-gray-50 text-gray-500 sm:text-sm"
-                      >
-                        Generate
-                      </button>
-                    </div>
-                    <p className="mt-1 text-xs text-gray-500">
-                      Use this URL in your Facebook App's webhook configuration
-                    </p>
-                  </div>
-                  
-                  <div>
-                    <label htmlFor="fb-verification-token" className="block text-sm font-medium text-gray-700">
-                      Verification Token
-                    </label>
-                    <div className="mt-1 flex rounded-md shadow-sm">
-                      <input
-                        type="text"
-                        id="fb-verification-token"
-                        value={fbVerificationToken}
-                        onChange={(e) => setFbVerificationToken(e.target.value)}
-                        className="flex-1 min-w-0 block w-full px-3 py-2 rounded-none rounded-l-md sm:text-sm border-gray-300"
-                        placeholder="Enter verification token"
-                      />
-                      <button
-                        type="button"
-                        onClick={generateFacebookToken}
-                        className="inline-flex items-center px-3 py-2 rounded-r-md border border-l-0 border-gray-300 bg-gray-50 text-gray-500 sm:text-sm"
-                      >
-                        Generate
-                      </button>
-                    </div>
-                    <p className="mt-1 text-xs text-gray-500">
-                      This token will be used to verify webhook requests from Facebook
-                    </p>
-                  </div>
-                  
-                  <div className="flex items-center">
-                    <input
-                      id="is-fb-active"
-                      name="is-fb-active"
-                      type="checkbox"
-                      checked={isFbWebhookActive}
-                      onChange={() => setIsFbWebhookActive(!isFbWebhookActive)}
-                      className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                    />
-                    <label htmlFor="is-fb-active" className="ml-2 block text-sm text-gray-900">
-                      Webhook is active
-                    </label>
-                  </div>
-                  
-                  <div>
-                    <button
-                      type="button"
-                      onClick={handleSaveFacebookWebhook}
-                      disabled={saving}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
-                    >
-                      {saving ? (
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      ) : (
-                        <Save className="h-5 w-5 mr-2" />
-                      )}
-                      {saving ? 'Saving...' : 'Save Webhook Configuration'}
-                    </button>
-                    
-                    {webhookSaved && (
-                      <p className="mt-2 text-sm text-green-600">
-                        ✓ Webhook configuration saved successfully
-                      </p>
-                    )}
-                  </div>
-                </div>
               </div>
             </div>
           )}
