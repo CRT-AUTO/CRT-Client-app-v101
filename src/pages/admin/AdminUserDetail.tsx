@@ -184,6 +184,7 @@ export default function AdminUserDetail() {
     
     try {
       setSaving(true);
+      setError(null);
       
       const flowbridgeConfig = {
         client_id: userId,
@@ -221,10 +222,14 @@ export default function AdminUserDetail() {
   };
   
   const handleSaveApiKey = async () => {
-    if (!userId || !apiKeyValue) return;
+    if (!userId || !apiKeyValue) {
+      setError("User ID and API key are required");
+      return;
+    }
     
     try {
       setSaving(true);
+      setError(null);
       
       if (voiceflowApiKey) {
         // Update existing API key
@@ -232,6 +237,7 @@ export default function AdminUserDetail() {
           api_key: apiKeyValue
         });
         setVoiceflowApiKey(updated);
+        console.log("Successfully updated API key:", updated);
       } else {
         // Create new API key
         const newApiKey = await createVoiceflowApiKey({
@@ -239,23 +245,28 @@ export default function AdminUserDetail() {
           api_key: apiKeyValue
         });
         setVoiceflowApiKey(newApiKey);
+        console.log("Successfully created new API key:", newApiKey);
       }
       
       setApiKeySaved(true);
       setTimeout(() => setApiKeySaved(false), 3000);
     } catch (err) {
       console.error('Error saving Voiceflow API key:', err);
-      setError('Failed to save API key. Please try again.');
+      setError(`Failed to save API key: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setSaving(false);
     }
   };
   
   const handleSaveFacebookWebhook = async () => {
-    if (!userId) return;
+    if (!userId) {
+      setError("User ID is required");
+      return;
+    }
     
     try {
       setSaving(true);
+      setError(null);
       
       // Find existing webhook config
       const existingWebhook = webhookConfigs.find(w => w.platform === 'facebook');
@@ -274,6 +285,8 @@ export default function AdminUserDetail() {
         setWebhookConfigs(prev => prev.map(w => 
           w.id === existingWebhook.id ? updated : w
         ));
+        
+        console.log("Facebook webhook updated successfully:", updated);
       } else {
         // Create new webhook config
         const newConfig = await createWebhookConfig({
@@ -288,23 +301,28 @@ export default function AdminUserDetail() {
         
         // Add to webhooks list
         setWebhookConfigs(prev => [...prev, newConfig]);
+        console.log("Facebook webhook created successfully:", newConfig);
       }
       
       setWebhookSaved(true);
       setTimeout(() => setWebhookSaved(false), 3000);
     } catch (err) {
       console.error('Error saving Facebook webhook configuration:', err);
-      setError('Failed to save Facebook webhook configuration. Please try again.');
+      setError(`Failed to save Facebook webhook configuration: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setSaving(false);
     }
   };
   
   const handleSaveInstagramWebhook = async () => {
-    if (!userId) return;
+    if (!userId) {
+      setError("User ID is required");
+      return;
+    }
     
     try {
       setSaving(true);
+      setError(null);
       
       // Find existing webhook config
       const existingWebhook = webhookConfigs.find(w => w.platform === 'instagram');
@@ -323,6 +341,8 @@ export default function AdminUserDetail() {
         setWebhookConfigs(prev => prev.map(w => 
           w.id === existingWebhook.id ? updated : w
         ));
+        
+        console.log("Instagram webhook updated successfully:", updated);
       } else {
         // Create new webhook config
         const newConfig = await createWebhookConfig({
@@ -337,13 +357,14 @@ export default function AdminUserDetail() {
         
         // Add to webhooks list
         setWebhookConfigs(prev => [...prev, newConfig]);
+        console.log("Instagram webhook created successfully:", newConfig);
       }
       
       setWebhookSaved(true);
       setTimeout(() => setWebhookSaved(false), 3000);
     } catch (err) {
       console.error('Error saving Instagram webhook configuration:', err);
-      setError('Failed to save Instagram webhook configuration. Please try again.');
+      setError(`Failed to save Instagram webhook configuration: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setSaving(false);
     }
@@ -611,6 +632,9 @@ export default function AdminUserDetail() {
                 <p className="mt-2 text-sm text-gray-500">
                   This API key will be used to access Voiceflow endpoints for the knowledge base and other features.
                 </p>
+                {voiceflowApiKey && (
+                  <p className="mt-2 text-sm text-green-600">API key is currently configured.</p>
+                )}
               </div>
               
               <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-3 sm:space-y-0">
@@ -619,12 +643,12 @@ export default function AdminUserDetail() {
                   disabled={!voiceflowProjectId || saving}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
                 >
-                  {saving ? (
+                  {saving && voiceflowSaved ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                   ) : (
                     <Save className="h-4 w-4 mr-2" />
                   )}
-                  {saving ? 'Saving...' : voiceflowMapping ? 'Update Project' : 'Save Project'}
+                  {saving && voiceflowSaved ? 'Saving...' : voiceflowMapping ? 'Update Project' : 'Save Project'}
                 </button>
                 
                 <button
@@ -632,18 +656,25 @@ export default function AdminUserDetail() {
                   disabled={!apiKeyValue || saving}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
                 >
-                  {saving ? (
+                  {saving && apiKeySaved ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                   ) : (
                     <Save className="h-4 w-4 mr-2" />
                   )}
-                  {saving ? 'Saving...' : voiceflowApiKey ? 'Update API Key' : 'Save API Key'}
+                  {saving && apiKeySaved ? 'Saving...' : voiceflowApiKey ? 'Update API Key' : 'Save API Key'}
                 </button>
                 
-                {(voiceflowSaved || apiKeySaved) && (
+                {voiceflowSaved && (
                   <span className="inline-flex items-center text-sm text-green-600">
                     <Check className="h-4 w-4 mr-1" />
-                    {voiceflowSaved ? 'Project configuration saved' : 'API key saved'}
+                    Project configuration saved
+                  </span>
+                )}
+                
+                {apiKeySaved && (
+                  <span className="inline-flex items-center text-sm text-green-600">
+                    <Check className="h-4 w-4 mr-1" />
+                    API key saved
                   </span>
                 )}
               </div>
@@ -778,15 +809,15 @@ export default function AdminUserDetail() {
               <div className="flex items-center">
                 <button
                   onClick={handleSaveFacebookWebhook}
-                  disabled={saving}
+                  disabled={saving && webhookSaved}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
                 >
-                  {saving ? (
+                  {saving && webhookSaved ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                   ) : (
                     <Save className="h-4 w-4 mr-2" />
                   )}
-                  {saving ? 'Saving...' : webhookConfigs.find(w => w.platform === 'facebook') ? 'Update Facebook Webhook' : 'Save Facebook Webhook'}
+                  {saving && webhookSaved ? 'Saving...' : webhookConfigs.find(w => w.platform === 'facebook') ? 'Update Facebook Webhook' : 'Save Facebook Webhook'}
                 </button>
                 
                 {webhookSaved && (
@@ -927,15 +958,15 @@ export default function AdminUserDetail() {
               <div className="flex items-center">
                 <button
                   onClick={handleSaveInstagramWebhook}
-                  disabled={saving}
+                  disabled={saving && webhookSaved}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-pink-600 hover:bg-pink-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-pink-500 disabled:opacity-50"
                 >
-                  {saving ? (
+                  {saving && webhookSaved ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                   ) : (
                     <Save className="h-4 w-4 mr-2" />
                   )}
-                  {saving ? 'Saving...' : webhookConfigs.find(w => w.platform === 'instagram') ? 'Update Instagram Webhook' : 'Save Instagram Webhook'}
+                  {saving && webhookSaved ? 'Saving...' : webhookConfigs.find(w => w.platform === 'instagram') ? 'Update Instagram Webhook' : 'Save Instagram Webhook'}
                 </button>
                 
                 {webhookSaved && (
