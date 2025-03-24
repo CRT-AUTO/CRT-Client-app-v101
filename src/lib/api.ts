@@ -30,10 +30,16 @@ export async function getSocialConnections() {
 
 export async function getSocialConnectionsByUserId(userId: string) {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('social_connections')
-      .select('*')
-      .eq('user_id', userId);
+      .select('*');
+      
+    // Only filter by user_id if it's provided
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+      
+    const { data, error } = await query;
 
     if (error) throw error;
     return data as SocialConnection[];
@@ -115,14 +121,24 @@ export async function getVoiceflowMappings() {
 }
 
 export async function getVoiceflowMappingByUserId(userId: string) {
-  const { data, error } = await supabase
-    .from('voiceflow_mappings')
-    .select('*')
-    .eq('user_id', userId)
-    .maybeSingle();
+  try {
+    let query = supabase
+      .from('voiceflow_mappings')
+      .select('*');
+      
+    // Only filter by user_id if it's provided  
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+    
+    const { data, error } = await query.maybeSingle();
 
-  if (error) throw error;
-  return data as VoiceflowMapping | null;
+    if (error) throw error;
+    return data as VoiceflowMapping | null;
+  } catch (error) {
+    console.error(`Error fetching Voiceflow mapping for user ${userId}:`, error);
+    throw error;
+  }
 }
 
 export async function createVoiceflowMapping(mapping: Omit<VoiceflowMapping, 'id' | 'created_at'>) {
@@ -166,14 +182,24 @@ export async function getVoiceflowApiKeys() {
 }
 
 export async function getVoiceflowApiKeyByUserId(userId: string) {
-  const { data, error } = await supabase
-    .from('voiceflow_api_keys')
-    .select('*')
-    .eq('user_id', userId)
-    .maybeSingle();
+  try {
+    let query = supabase
+      .from('voiceflow_api_keys')
+      .select('*');
+      
+    // Only filter by user_id if it's provided
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+    
+    const { data, error } = await query.maybeSingle();
 
-  if (error) throw error;
-  return data as VoiceflowApiKey | null;
+    if (error) throw error;
+    return data as VoiceflowApiKey | null;
+  } catch (error) {
+    console.error(`Error fetching Voiceflow API key for user ${userId}:`, error);
+    throw error;
+  }
 }
 
 export async function createVoiceflowApiKey(apiKey: Omit<VoiceflowApiKey, 'id' | 'created_at' | 'updated_at'>) {
@@ -216,29 +242,49 @@ export async function getWebhookConfigs() {
 }
 
 export async function getWebhookConfigByUserId(userId: string, platform?: 'all' | 'facebook' | 'instagram') {
-  const query = supabase
-    .from('webhook_configs')
-    .select('*')
-    .eq('user_id', userId);
+  try {
+    let query = supabase
+      .from('webhook_configs')
+      .select('*');
+      
+    // Only filter by user_id if it's provided
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+      
+    if (platform) {
+      query = query.eq('platform', platform);
+    }
     
-  if (platform) {
-    query.eq('platform', platform);
-  }
-  
-  const { data, error } = await query.maybeSingle();
+    const { data, error } = await query.maybeSingle();
 
-  if (error) throw error;
-  return data as WebhookConfig | null;
+    if (error) throw error;
+    return data as WebhookConfig | null;
+  } catch (error) {
+    console.error(`Error fetching webhook config for user ${userId}:`, error);
+    throw error;
+  }
 }
 
 export async function getWebhookConfigsByUserId(userId: string) {
-  const { data, error } = await supabase
-    .from('webhook_configs')
-    .select('*')
-    .eq('user_id', userId);
+  try {
+    let query = supabase
+      .from('webhook_configs')
+      .select('*');
+      
+    // Only filter by user_id if it's provided
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
 
-  if (error) throw error;
-  return data as WebhookConfig[];
+    const { data, error } = await query;
+
+    if (error) throw error;
+    return data as WebhookConfig[];
+  } catch (error) {
+    console.error(`Error fetching webhook configs for user ${userId}:`, error);
+    throw error;
+  }
 }
 
 export async function createWebhookConfig(config: Omit<WebhookConfig, 'id' | 'created_at' | 'updated_at'>) {
