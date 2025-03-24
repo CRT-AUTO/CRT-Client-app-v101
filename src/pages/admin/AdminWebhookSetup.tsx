@@ -20,23 +20,33 @@ export default function AdminWebhookSetup() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const webhookConfigs = await getWebhookConfigs();
-      setWebhooks(webhookConfigs);
-      
-      // Load user emails for each webhook
-      const userInfo: Record<string, string> = {};
-      for (const webhook of webhookConfigs) {
-        try {
-          const user = await getUserById(webhook.user_id);
-          userInfo[webhook.user_id] = user.email;
-        } catch (err) {
-          console.error(`Error loading user for webhook ${webhook.id}:`, err);
-          userInfo[webhook.user_id] = 'Unknown User';
-        }
-      }
-      setUserMap(userInfo);
-      
       setError(null);
+      
+      // Load webhook configurations
+      try {
+        const webhookConfigs = await getWebhookConfigs();
+        setWebhooks(webhookConfigs);
+        
+        // Load user emails for each webhook
+        const userInfo: Record<string, string> = {};
+        for (const webhook of webhookConfigs) {
+          try {
+            if (webhook.user_id) {
+              const user = await getUserById(webhook.user_id);
+              userInfo[webhook.user_id] = user.email || 'Unknown Email';
+            } else {
+              userInfo[webhook.user_id || 'unknown'] = 'Unknown User';
+            }
+          } catch (err) {
+            console.error(`Error loading user for webhook ${webhook.id}:`, err);
+            userInfo[webhook.user_id || 'unknown'] = 'Unknown User';
+          }
+        }
+        setUserMap(userInfo);
+      } catch (err) {
+        console.error('Error loading webhook configs:', err);
+        throw err;  // Re-throw to be caught by the outer catch
+      }
     } catch (err) {
       console.error('Error loading webhook configs:', err);
       setError('Failed to load webhook configurations. Please try again.');
@@ -48,7 +58,10 @@ export default function AdminWebhookSetup() {
   const handleRefresh = async () => {
     try {
       setRefreshing(true);
+      setError(null);
       await loadData();
+    } catch (err) {
+      setError('Failed to refresh data. Please try again.');
     } finally {
       setRefreshing(false);
     }
@@ -68,6 +81,10 @@ export default function AdminWebhookSetup() {
   
   const generateWebhookUrl = async (webhook: WebhookConfig) => {
     try {
+      if (!webhook.user_id) {
+        throw new Error('Webhook has no associated user ID');
+      }
+      
       // Generate a unique URL based on the user ID and platform
       const baseUrl = window.location.origin;
       const platform = webhook.platform || 'all';
@@ -225,10 +242,10 @@ export default function AdminWebhookSetup() {
                   <tr key={webhook.id}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
-                        {userMap[webhook.user_id] || webhook.user_id}
+                        {userMap[webhook.user_id || 'unknown'] || webhook.user_id || 'Unknown User'}
                       </div>
                       <div className="text-xs text-gray-500">
-                        {webhook.user_id.slice(0, 8)}...
+                        {webhook.user_id ? webhook.user_id.slice(0, 8) + '...' : 'No User ID'}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -320,12 +337,16 @@ export default function AdminWebhookSetup() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      <a
-                        href={`/admin/users/${webhook.user_id}`}
-                        className="text-indigo-600 hover:text-indigo-900"
-                      >
-                        Manage User
-                      </a>
+                      {webhook.user_id ? (
+                        <a
+                          href={`/admin/users/${webhook.user_id}`}
+                          className="text-indigo-600 hover:text-indigo-900"
+                        >
+                          Manage User
+                        </a>
+                      ) : (
+                        <span className="text-gray-400">No user associated</span>
+                      )}
                     </td>
                   </tr>
                 ))}
