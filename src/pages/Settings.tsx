@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Facebook, Instagram, Bot, Save, Trash2, Book, AlertTriangle, RefreshCw, Clock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { createVoiceflowMapping, getVoiceflowMappings, getSocialConnections, getTokenRefreshHistory, getVoiceflowMappingByUserId, getWebhookConfigsByUserId } from '../lib/api';
+import { createVoiceflowMapping, getVoiceflowMappings, getSocialConnections, getTokenRefreshHistory, getVoiceflowMappingByUserId, getWebhookConfigsByUserId, updateVoiceflowMapping } from '../lib/api';
 import { checkAndRefreshTokens, getDaysUntilExpiry, manuallyRefreshToken } from '../lib/tokenRefresh';
 import { loginWithFacebook, checkFacebookLoginStatus, handleFacebookStatusChange } from '../lib/facebookAuth';
 import { getVoiceflowKnowledgeBase } from '../lib/voiceflow';
@@ -311,26 +311,45 @@ export default function Settings() {
       
       if (voiceflowMappings.length > 0) {
         // Update existing mapping
-        // Implementation would go here...
-        alert("Updating a Voiceflow mapping is not implemented in this demo");
+        const existingMapping = voiceflowMappings[0];
+        const updatedMapping = await updateVoiceflowMapping(existingMapping.id, {
+          vf_project_id: voiceflowProjectId,
+          flowbridge_config: flowbridgeConfig
+        });
+        
+        // Update local state
+        setVoiceflowMappings([updatedMapping]);
+        setVoiceflowProjectId(updatedMapping.vf_project_id);
+        
+        // Try to load updated knowledge base
+        try {
+          const kb = await getVoiceflowKnowledgeBase(updatedMapping.vf_project_id);
+          setKnowledgeBase(kb);
+        } catch (kbError) {
+          console.error('Error loading updated knowledge base:', kbError);
+        }
+        
+        alert("Voiceflow project configuration updated successfully!");
       } else {
         // Create new mapping
-        await createVoiceflowMapping({
+        const newMapping = await createVoiceflowMapping({
           user_id: user.id,
           vf_project_id: voiceflowProjectId,
           flowbridge_config: flowbridgeConfig
         });
         
         // Update local state
-        setVoiceflowMappings([{
-          id: 'temp-id',
-          user_id: user.id,
-          vf_project_id: voiceflowProjectId,
-          flowbridge_config: flowbridgeConfig,
-          created_at: new Date().toISOString()
-        }]);
+        setVoiceflowMappings([newMapping]);
         
-        alert("Voiceflow project configuration saved!");
+        // Try to load knowledge base
+        try {
+          const kb = await getVoiceflowKnowledgeBase(newMapping.vf_project_id);
+          setKnowledgeBase(kb);
+        } catch (kbError) {
+          console.error('Error loading knowledge base:', kbError);
+        }
+        
+        alert("Voiceflow project configuration saved successfully!");
       }
     } catch (error) {
       console.error('Error saving Voiceflow config:', error);
