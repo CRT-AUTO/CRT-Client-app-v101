@@ -2,7 +2,7 @@
 
 const { createClient } = require('@supabase/supabase-js');
 
-// Initialize Supabase client for verification (if needed)
+// Initialize Supabase client for verification if needed
 let supabase = null;
 try {
   const supabaseUrl = process.env.VITE_SUPABASE_URL;
@@ -18,7 +18,6 @@ try {
 }
 
 exports.handler = async (event, context) => {
-  // Set CORS headers
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
@@ -59,7 +58,7 @@ exports.handler = async (event, context) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing hub.verify_token parameter.' }) };
     }
 
-    // Extract userId and platform from path if available
+    // Extract userId and platform from the path if available
     const pathSegments = event.path.split('/');
     let userId = null;
     let platform = 'all';
