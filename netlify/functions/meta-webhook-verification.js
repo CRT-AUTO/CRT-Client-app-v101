@@ -68,20 +68,20 @@ exports.handler = async (event, context) => {
       console.log(`Extracted userId: ${userId}, platform: ${platform}`);
     }
 
-    // Known token fallback
-    const knownTokens = [
-      '14abae006d729dbc83ca136af12bbbe1d9480eff'
-    ];
-    if (knownTokens.includes(token)) {
-      console.log('Verification successful using known token');
-      return {
-        statusCode: 200,
-        headers: { ...headers, 'Content-Type': 'text/plain' },
-        body: challenge
-      };
-    }
+    // ---------- Known token fallback
+    // const knownTokens = [
+    //   '14abae006d729dbc83ca136af12bbbe1d9480eff'
+    // ];
+    // if (knownTokens.includes(token)) {
+    //   console.log('Verification successful using known token');
+    //   return {
+    //     statusCode: 200,
+    //     headers: { ...headers, 'Content-Type': 'text/plain' },
+    //     body: challenge
+    //   };
+    // }
 
-    // Optionally, query Supabase for a matching token
+    // Query Supabase for a matching token
     if (supabase) {
       let query = supabase.from('webhook_configs').select('*').eq('verification_token', token);
       if (userId) {
