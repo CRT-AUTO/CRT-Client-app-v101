@@ -1,7 +1,8 @@
-// meta-webhook-verification.js
+// netlify/functions/meta-webhook-verification.js
+
 const { createClient } = require('@supabase/supabase-js');
 
-// Initialize Supabase client for verification if needed
+// Initialize Supabase client for verification (if needed)
 let supabase = null;
 try {
   const supabaseUrl = process.env.VITE_SUPABASE_URL;
@@ -24,7 +25,6 @@ exports.handler = async (event, context) => {
     'Access-Control-Allow-Methods': 'GET, OPTIONS'
   };
 
-  // Handle preflight requests
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, headers };
   }
@@ -59,7 +59,7 @@ exports.handler = async (event, context) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing hub.verify_token parameter.' }) };
     }
 
-    // Extract userId and platform from the path if available
+    // Extract userId and platform from path if available
     const pathSegments = event.path.split('/');
     let userId = null;
     let platform = 'all';
@@ -69,9 +69,9 @@ exports.handler = async (event, context) => {
       console.log(`Extracted userId: ${userId}, platform: ${platform}`);
     }
 
-    // Known token fallback (for testing or if you configured one in your app)
+    // Known token fallback
     const knownTokens = [
-      '14abae006d729dbc83ca136af12bbbe1d9480eff' // Set this to match the token in your Meta App Dashboard
+      '14abae006d729dbc83ca136af12bbbe1d9480eff'
     ];
     if (knownTokens.includes(token)) {
       console.log('Verification successful using known token');
@@ -82,7 +82,7 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // If Supabase is available, you can optionally query the webhook_configs table
+    // Optionally, query Supabase for a matching token
     if (supabase) {
       let query = supabase.from('webhook_configs').select('*').eq('verification_token', token);
       if (userId) {
@@ -110,6 +110,7 @@ exports.handler = async (event, context) => {
 
     console.log('No matching verification token found');
     return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid verification token.' }) };
+
   } catch (error) {
     console.error('Error in webhook verification:', error);
     return { statusCode: 500, headers, body: JSON.stringify({ error: 'Internal server error during webhook verification.' }) };
