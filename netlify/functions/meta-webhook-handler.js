@@ -31,14 +31,30 @@ const {
   validateWebhook
 } = require('./webhook-security');
 
-// Initialize Supabase client
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+// Initialize Supabase client with error handling
+let supabase = null;
+try {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+  
+  if (supabaseUrl && supabaseServiceKey) {
+    supabase = createClient(supabaseUrl, supabaseServiceKey);
+    console.log("Supabase client initialized successfully in webhook handler");
+  } else {
+    console.warn(`Missing Supabase credentials. URL: ${supabaseUrl ? 'Present' : 'Missing'}, Service Key: ${supabaseServiceKey ? 'Present' : 'Missing'}`);
+  }
+} catch (error) {
+  console.error('Error initializing Supabase client:', error);
+}
 
 // Process incoming messages from Meta
 async function processMessage(userId, platform, senderId, recipientId, message, timestamp) {
   try {
+    // Make sure Supabase is initialized
+    if (!supabase) {
+      throw new Error('Database connection is not available');
+    }
+    
     // Use retry with backoff for finding the social connection
     const getSocialConnection = async () => {
       const { data: connections, error: connectionError } = await supabase
@@ -158,12 +174,12 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
         .from('voiceflow_mappings')
         .select('*')
         .eq('user_id', userId)
-        .single();
+        .limit(1);
         
       if (error) throw error;
-      if (!data) throw new Error('No Voiceflow agent configured');
+      if (!data || data.length === 0) throw new Error('No Voiceflow agent configured');
       
-      return data;
+      return data[0];
     };
     
     const voiceflowMapping = await retryWithBackoff(getVoiceflowMapping, {
@@ -178,9 +194,9 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
         .from('voiceflow_api_keys')
         .select('api_key')
         .eq('user_id', userId)
-        .maybeSingle();
+        .limit(1);
         
-      return data?.api_key || process.env.VOICEFLOW_API_KEY;
+      return data && data.length > 0 ? data[0].api_key : process.env.VOICEFLOW_API_KEY;
     };
     
     const apiKey = await retryWithBackoff(getApiKey, {
