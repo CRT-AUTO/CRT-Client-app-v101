@@ -3,10 +3,21 @@
 const { createClient } = require('@supabase/supabase-js');
 const { retryWithBackoff, isTransientError } = require('./error-recovery');
 
-// Initialize Supabase client
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+// Initialize Supabase client with error handling
+let supabase = null;
+try {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+  
+  if (supabaseUrl && supabaseServiceKey) {
+    supabase = createClient(supabaseUrl, supabaseServiceKey);
+    console.log("Supabase client initialized successfully in message queue");
+  } else {
+    console.warn(`Missing Supabase credentials in message-queue.js. URL: ${supabaseUrl ? 'Present' : 'Missing'}, Service Key: ${supabaseServiceKey ? 'Present' : 'Missing'}`);
+  }
+} catch (error) {
+  console.error('Error initializing Supabase client in message-queue.js:', error);
+}
 
 /**
  * Add a message to the queue for processing
@@ -21,6 +32,10 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
  */
 async function queueMessage(userId, platform, senderId, recipientId, messageContent, timestamp) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     const { data, error } = await supabase
       .from('message_queue')
       .insert([{
@@ -66,6 +81,10 @@ async function queueMessage(userId, platform, senderId, recipientId, messageCont
  */
 async function updateProcessingStatus(messageQueueId, stage, status, error = null, metadata = {}) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     const { data, error: statusError } = await supabase
       .from('message_processing_status')
       .insert([{
@@ -114,6 +133,11 @@ async function updateProcessingStatus(messageQueueId, stage, status, error = nul
  */
 async function getPendingMessages(limit = 10) {
   try {
+    if (!supabase) {
+      console.warn('Database connection not available, cannot get pending messages');
+      return [];
+    }
+    
     const { data, error } = await supabase
       .from('message_queue')
       .select('*')
@@ -138,6 +162,10 @@ async function getPendingMessages(limit = 10) {
  */
 async function markMessageAsProcessing(messageId) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     const { data, error } = await supabase
       .from('message_queue')
       .update({ 
@@ -165,6 +193,10 @@ async function markMessageAsProcessing(messageId) {
  */
 async function processQueuedMessage(messageId, processorFunction) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     // Mark message as being processed
     await markMessageAsProcessing(messageId);
     
@@ -256,6 +288,11 @@ async function processQueuedMessage(messageId, processorFunction) {
  */
 async function processPendingMessages(processorFunction, batchSize = 5) {
   try {
+    if (!supabase) {
+      console.warn('Database connection not available, cannot process pending messages');
+      return { processed: 0, results: [] };
+    }
+    
     // Get pending messages
     const pendingMessages = await getPendingMessages(batchSize);
     
