@@ -315,7 +315,23 @@ export async function getWebhookConfigs() {
   try {
     const { data, error } = await supabase
       .from('webhook_configs')
-      .select('*');
+      .select(`
+        *,
+        user:users(
+          id,
+          email,
+          role
+        ),
+        voiceflow_mapping:voiceflow_mappings(
+          id,
+          vf_project_id
+        ),
+        social_connections:social_connections(
+          id,
+          fb_page_id,
+          ig_account_id
+        )
+      `);
 
     if (error) throw error;
     return data as WebhookConfig[];
@@ -327,14 +343,26 @@ export async function getWebhookConfigs() {
 
 export async function getWebhookConfigByUserId(userId: string, platform?: 'all' | 'facebook' | 'instagram') {
   try {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
     let query = supabase
       .from('webhook_configs')
-      .select('*');
-      
-    // Only filter by user_id if it's provided
-    if (userId) {
-      query = query.eq('user_id', userId);
-    }
+      .select(`
+        *,
+        voiceflow_mapping:voiceflow_mappings(
+          id,
+          vf_project_id
+        ),
+        social_connections:social_connections(
+          id,
+          fb_page_id,
+          ig_account_id,
+          access_token
+        )
+      `)
+      .eq('user_id', userId);
       
     if (platform) {
       query = query.eq('platform', platform);
@@ -352,16 +380,26 @@ export async function getWebhookConfigByUserId(userId: string, platform?: 'all' 
 
 export async function getWebhookConfigsByUserId(userId: string) {
   try {
-    let query = supabase
-      .from('webhook_configs')
-      .select('*');
-      
-    // Only filter by user_id if it's provided
-    if (userId) {
-      query = query.eq('user_id', userId);
+    if (!userId) {
+      throw new Error('User ID is required');
     }
 
-    const { data, error } = await query;
+    const { data, error } = await supabase
+      .from('webhook_configs')
+      .select(`
+        *,
+        voiceflow_mapping:voiceflow_mappings(
+          id,
+          vf_project_id
+        ),
+        social_connections:social_connections(
+          id,
+          fb_page_id,
+          ig_account_id,
+          access_token
+        )
+      `)
+      .eq('user_id', userId);
 
     if (error) throw error;
     return data as WebhookConfig[];
@@ -376,7 +414,22 @@ export async function createWebhookConfig(config: Omit<WebhookConfig, 'id' | 'cr
     if (!config.user_id) {
       throw new Error('User ID is required to create a webhook config');
     }
+
+    // Check if a webhook config already exists for this user and platform
+    const existingConfig = await getWebhookConfigByUserId(config.user_id, config.platform);
     
+    if (existingConfig) {
+      // Update existing config
+      return await updateWebhookConfig(existingConfig.id, {
+        webhook_url: config.webhook_url,
+        verification_token: config.verification_token,
+        is_active: config.is_active,
+        webhook_name: config.webhook_name,
+        generated_url: config.generated_url
+      });
+    }
+    
+    // Create new config
     const { data, error } = await supabase
       .from('webhook_configs')
       .insert([{
@@ -413,7 +466,19 @@ export async function updateWebhookConfig(id: string, config: Partial<WebhookCon
       .from('webhook_configs')
       .update(updateData)
       .eq('id', id)
-      .select();
+      .select(`
+        *,
+        voiceflow_mapping:voiceflow_mappings(
+          id,
+          vf_project_id
+        ),
+        social_connections:social_connections(
+          id,
+          fb_page_id,
+          ig_account_id,
+          access_token
+        )
+      `);
 
     if (error) throw error;
     return data[0] as WebhookConfig;
