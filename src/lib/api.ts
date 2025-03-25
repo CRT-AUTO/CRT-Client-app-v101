@@ -164,49 +164,6 @@ export async function getVoiceflowMappingByUserId(userId: string) {
   }
 }
 
-export async function createVoiceflowMapping(mapping: Omit<VoiceflowMapping, 'id' | 'created_at'>) {
-  try {
-    if (!mapping.user_id || !mapping.vf_project_id) {
-      throw new Error('User ID and Voiceflow project ID are required');
-    }
-    
-    const { data, error } = await supabase
-      .from('voiceflow_mappings')
-      .insert([{
-        user_id: mapping.user_id,
-        vf_project_id: mapping.vf_project_id,
-        flowbridge_config: mapping.flowbridge_config || {}
-      }])
-      .select();
-
-    if (error) throw error;
-    return data[0] as VoiceflowMapping;
-  } catch (error) {
-    console.error("Error creating Voiceflow mapping:", error);
-    throw error;
-  }
-}
-
-export async function updateVoiceflowMapping(id: string, mapping: Partial<VoiceflowMapping>) {
-  try {
-    if (!id) {
-      throw new Error('Mapping ID is required to update');
-    }
-    
-    const { data, error } = await supabase
-      .from('voiceflow_mappings')
-      .update(mapping)
-      .eq('id', id)
-      .select();
-
-    if (error) throw error;
-    return data[0] as VoiceflowMapping;
-  } catch (error) {
-    console.error(`Error updating Voiceflow mapping ${id}:`, error);
-    throw error;
-  }
-}
-
 // Voiceflow API keys (admin only)
 export async function getVoiceflowApiKeys() {
   try {
@@ -224,16 +181,15 @@ export async function getVoiceflowApiKeys() {
 
 export async function getVoiceflowApiKeyByUserId(userId: string) {
   try {
-    let query = supabase
-      .from('voiceflow_api_keys')
-      .select('*');
-      
-    // Only filter by user_id if it's provided
-    if (userId) {
-      query = query.eq('user_id', userId);
+    if (!userId) {
+      throw new Error('User ID is required');
     }
-    
-    const { data, error } = await query.maybeSingle();
+
+    const { data, error } = await supabase
+      .from('voiceflow_api_keys')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
 
     if (error) throw error;
     return data as VoiceflowApiKey | null;
@@ -248,7 +204,16 @@ export async function createVoiceflowApiKey(apiKey: Omit<VoiceflowApiKey, 'id' |
     if (!apiKey.user_id || !apiKey.api_key) {
       throw new Error('User ID and API key are required');
     }
+
+    // First check if a key already exists for this user
+    const existingKey = await getVoiceflowApiKeyByUserId(apiKey.user_id);
     
+    if (existingKey) {
+      // Update existing key
+      return await updateVoiceflowApiKey(existingKey.id, { api_key: apiKey.api_key });
+    }
+    
+    // Create new key
     const { data, error } = await supabase
       .from('voiceflow_api_keys')
       .insert([{
@@ -260,7 +225,7 @@ export async function createVoiceflowApiKey(apiKey: Omit<VoiceflowApiKey, 'id' |
     if (error) throw error;
     return data[0] as VoiceflowApiKey;
   } catch (error) {
-    console.error("Error creating Voiceflow API key:", error);
+    console.error("Error creating/updating Voiceflow API key:", error);
     throw error;
   }
 }
@@ -286,6 +251,61 @@ export async function updateVoiceflowApiKey(id: string, apiKey: Partial<Voiceflo
     return data[0] as VoiceflowApiKey;
   } catch (error) {
     console.error(`Error updating Voiceflow API key ${id}:`, error);
+    throw error;
+  }
+}
+
+export async function createVoiceflowMapping(mapping: Omit<VoiceflowMapping, 'id' | 'created_at'>) {
+  try {
+    if (!mapping.user_id || !mapping.vf_project_id) {
+      throw new Error('User ID and Voiceflow project ID are required');
+    }
+    
+    // First check if a mapping already exists for this user
+    const existingMapping = await getVoiceflowMappingByUserId(mapping.user_id);
+    
+    if (existingMapping) {
+      // Update existing mapping
+      return await updateVoiceflowMapping(existingMapping.id, {
+        vf_project_id: mapping.vf_project_id,
+        flowbridge_config: mapping.flowbridge_config
+      });
+    }
+    
+    // Create new mapping
+    const { data, error } = await supabase
+      .from('voiceflow_mappings')
+      .insert([{
+        user_id: mapping.user_id,
+        vf_project_id: mapping.vf_project_id,
+        flowbridge_config: mapping.flowbridge_config || {}
+      }])
+      .select();
+
+    if (error) throw error;
+    return data[0] as VoiceflowMapping;
+  } catch (error) {
+    console.error("Error creating/updating Voiceflow mapping:", error);
+    throw error;
+  }
+}
+
+export async function updateVoiceflowMapping(id: string, mapping: Partial<VoiceflowMapping>) {
+  try {
+    if (!id) {
+      throw new Error('Mapping ID is required to update');
+    }
+    
+    const { data, error } = await supabase
+      .from('voiceflow_mappings')
+      .update(mapping)
+      .eq('id', id)
+      .select();
+
+    if (error) throw error;
+    return data[0] as VoiceflowMapping;
+  } catch (error) {
+    console.error(`Error updating Voiceflow mapping ${id}:`, error);
     throw error;
   }
 }
