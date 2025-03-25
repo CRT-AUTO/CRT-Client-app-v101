@@ -154,7 +154,7 @@ export async function getVoiceflowMappingByUserId(userId: string) {
       query = query.eq('user_id', userId);
     }
     
-    // Use limit(1) and first result instead of maybeSingle to avoid errors with multiple results
+    // Use limit(1) instead of maybeSingle to avoid errors with multiple results
     const { data, error } = await query.limit(1);
 
     if (error) throw error;
@@ -485,10 +485,10 @@ export async function getConversation(id: string) {
       .from('conversations')
       .select('*')
       .eq('id', id)
-      .single();
+      .limit(1);
 
     if (error) throw error;
-    return data as Conversation;
+    return data && data.length > 0 ? data[0] as Conversation : null;
   } catch (error) {
     console.error(`Error fetching conversation ${id}:`, error);
     throw error;
@@ -1168,10 +1168,10 @@ export async function getUserById(userId: string) {
       .from('users')
       .select('*')
       .eq('id', userId)
-      .single();
+      .limit(1);
       
     if (error) throw error;
-    return data;
+    return data && data.length > 0 ? data[0] : null;
   } catch (error) {
     console.error(`Error getting user by ID ${userId}:`, error);
     throw error;
