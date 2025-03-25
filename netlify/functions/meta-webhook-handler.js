@@ -3,31 +3,16 @@
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 
-// Import other modules (adjust paths as needed)
+// Import helper modules (adjust paths as needed)
 const { 
   processMetaMessage, 
   processInstagramMessage, 
   prepareVoiceflowRequest, 
   formatVoiceflowResponse 
 } = require('./message-processor');
-const {
-  retryWithBackoff,
-  isTransientError,
-  saveToDeadLetterQueue,
-  processError
-} = require('./error-recovery');
-const {
-  queueMessage,
-  updateProcessingStatus,
-  processPendingMessages
-} = require('./message-queue');
-const {
-  getOrCreateSession,
-  updateSessionContext,
-  linkSessionToConversation,
-  extendSession,
-  prepareVoiceflowContext
-} = require('./session-manager');
+const { retryWithBackoff, isTransientError, saveToDeadLetterQueue, processError } = require('./error-recovery');
+const { queueMessage, updateProcessingStatus, processPendingMessages } = require('./message-queue');
+const { getOrCreateSession, updateSessionContext, linkSessionToConversation, extendSession, prepareVoiceflowContext } = require('./session-manager');
 const { validateWebhook } = require('./webhook-security');
 
 // Initialize Supabase client
@@ -45,24 +30,20 @@ try {
   console.error('Error initializing Supabase client:', error);
 }
 
-// Import the verification handler to delegate GET requests
+// Import the verification handler (for GET requests)
 const verificationHandler = require('./meta-webhook-verification');
 
 /**
- * Process an incoming message.
- * This function contains your core message processing logic including:
- * - Finding social connections
- * - Creating/updating sessions and conversations
- * - Processing messages via Voiceflow
- * - Queuing messages and error handling
+ * Core message processing function.
+ * This function implements your message processing workflow including:
+ * - Finding social connections, session creation, and conversation management
+ * - Voiceflow API integration and error recovery
  */
 async function processMessage(userId, platform, senderId, recipientId, message, timestamp) {
   try {
-    if (!supabase) {
-      throw new Error('Database connection is not available');
-    }
+    if (!supabase) throw new Error('Database connection is not available');
 
-    // Find social connection with retry
+    // Retrieve social connection with retry
     const getSocialConnection = async () => {
       const { data: connections, error: connectionError } = await supabase
         .from('social_connections')
@@ -82,10 +63,10 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
       shouldRetry: (error) => isTransientError(error)
     });
 
-    // Get or create a session for this user and participant
+    // Get or create a session
     const session = await getOrCreateSession(userId, senderId, platform);
 
-    // Find or create a conversation with retry
+    // Find or create a conversation
     const getOrCreateConversation = async () => {
       let { data: conversations, error: conversationError } = await supabase
         .from('conversations')
@@ -134,10 +115,10 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
     // Link session to conversation if needed
     await linkSessionToConversation(conversationId, session.id);
 
-    // Process the message using our advanced processor
+    // Process the incoming message
     const processedMessage = processMetaMessage(message, platform);
 
-    // Store the incoming message
+    // Store the incoming user message
     const saveUserMessage = async () => {
       const { data, error } = await supabase
         .from('messages')
@@ -152,7 +133,6 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
       if (error) throw error;
       return data[0];
     };
-
     const savedMessage = await retryWithBackoff(saveUserMessage, {
       maxRetries: 2,
       initialDelay: 300,
@@ -162,7 +142,7 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
     // Update session context with the user message
     await updateSessionContext(session.id, { lastUserMessage: processedMessage.text });
 
-    // Get the user's Voiceflow mapping
+    // Retrieve Voiceflow mapping
     const getVoiceflowMapping = async () => {
       const { data, error } = await supabase
         .from('voiceflow_mappings')
@@ -173,14 +153,13 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
       if (!data || data.length === 0) throw new Error('No Voiceflow agent configured');
       return data[0];
     };
-
     const voiceflowMapping = await retryWithBackoff(getVoiceflowMapping, {
       maxRetries: 2,
       initialDelay: 300,
       shouldRetry: (error) => isTransientError(error)
     });
 
-    // Get Voiceflow API key if available
+    // Retrieve Voiceflow API key
     const getApiKey = async () => {
       const { data } = await supabase
         .from('voiceflow_api_keys')
@@ -189,7 +168,6 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
         .limit(1);
       return data && data.length > 0 ? data[0].api_key : process.env.VOICEFLOW_API_KEY;
     };
-
     const apiKey = await retryWithBackoff(getApiKey, {
       maxRetries: 2,
       initialDelay: 300,
@@ -199,7 +177,7 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
       throw new Error('No Voiceflow API key found');
     }
 
-    // Prepare Voiceflow request
+    // Prepare context and Voiceflow request
     const baseContext = {
       messageId: savedMessage.id,
       participantId: senderId,
@@ -210,7 +188,7 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
     const voiceflowContext = await prepareVoiceflowContext(session.id, baseContext);
     const voiceflowRequest = prepareVoiceflowRequest(processedMessage, voiceflowContext);
 
-    // Call Voiceflow API with retry
+    // Call Voiceflow API
     const callVoiceflow = async () => {
       return await axios.post(
         `https://general-runtime.voiceflow.com/state/user/${userId}/interact`,
@@ -234,7 +212,7 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
         shouldRetry: (error) => isTransientError(error) || (error.response && error.response.status >= 500)
       });
 
-      // Extract any context updates from Voiceflow response
+      // Extract context updates from Voiceflow response and update session context
       const contextUpdates = extractContextFromVoiceflowResponse(voiceflowResponse.data);
       if (Object.keys(contextUpdates).length > 0) {
         await updateSessionContext(session.id, contextUpdates);
@@ -318,7 +296,7 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
     }
     return { success: false, error: error.message };
   }
-};
+}
 
 /**
  * Extract context variables from Voiceflow response.
@@ -346,5 +324,5 @@ function extractContextFromVoiceflowResponse(voiceflowResponse) {
   return contextUpdates;
 }
 
-// Export processMessage for use in the message queue function
+// Export processMessage for use in process-message-queue.js
 exports.processMessage = processMessage;
