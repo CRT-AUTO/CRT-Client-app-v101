@@ -1,684 +1,1383 @@
-import React, { useState, useEffect } from 'react';
-import { Facebook, Instagram, Bot, Save, Trash2, Book, AlertTriangle, RefreshCw, Clock } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import { getSocialConnections, getTokenRefreshHistory, getWebhookConfigsByUserId } from '../lib/api';
-import { checkAndRefreshTokens, getDaysUntilExpiry, manuallyRefreshToken } from '../lib/tokenRefresh';
-import { loginWithFacebook, checkFacebookLoginStatus, handleFacebookStatusChange } from '../lib/facebookAuth';
-import type { SocialConnection, TokenRefreshHistory, TokenRefreshResult, WebhookConfig } from '../types';
-import LoadingIndicator from '../components/LoadingIndicator';
-import ErrorAlert from '../components/ErrorAlert';
+import { supabase } from './supabase';
+import type { 
+  SocialConnection, 
+  VoiceflowMapping, 
+  Conversation, 
+  Message,
+  ApiRateLimit,
+  TokenRefreshHistory,
+  MessageAnalytics,
+  DashboardStats,
+  WebhookConfig,
+  UserSummary,
+  VoiceflowApiKey
+} from '../types';
 
-export default function Settings() {
-  const [socialConnections, setSocialConnections] = useState<SocialConnection[]>([]);
-  const [refreshHistory, setRefreshHistory] = useState<TokenRefreshHistory[]>([]);
-  const [webhookConfigs, setWebhookConfigs] = useState<WebhookConfig[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('connections');
-  const [refreshingTokens, setRefreshingTokens] = useState(false);
-  const [refreshResults, setRefreshResults] = useState<TokenRefreshResult[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [fbConnecting, setFbConnecting] = useState(false);
+// Social connections
+export async function getSocialConnections() {
+  try {
+    const { data, error } = await supabase
+      .from('social_connections')
+      .select('*');
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        setLoading(true);
-        setError(null);
-        
-        // Get the current user
-        const { data: userData } = await supabase.auth.getUser();
-        if (!userData.user) {
-          throw new Error('User not authenticated');
-        }
-        
-        // Load social connections
-        try {
-          const connections = await getSocialConnections();
-          setSocialConnections(connections);
-        } catch (connError) {
-          console.error('Error loading social connections:', connError);
-          // Continue loading other data
-        }
-        
-        // Load webhook configs
-        try {
-          const webhooks = await getWebhookConfigsByUserId(userData.user.id);
-          setWebhookConfigs(webhooks);
-        } catch (webhookError) {
-          console.error('Error loading webhook configs:', webhookError);
-          // Continue loading other data
-        }
-        
-        // Load token refresh history
-        try {
-          const history = await getTokenRefreshHistory(userData.user.id);
-          setRefreshHistory(history);
-        } catch (historyError) {
-          console.error('Error loading token refresh history:', historyError);
-          // Continue loading other data
-        }
-      } catch (error) {
-        console.error('Error loading data:', error);
-        setError(error instanceof Error ? error.message : 'Failed to load settings data');
-      } finally {
-        setLoading(false);
-      }
+    if (error) throw error;
+    return data as SocialConnection[];
+  } catch (error) {
+    console.error("Error fetching social connections:", error);
+    return [];
+  }
+}
+
+export async function getSocialConnectionsByUserId(userId: string) {
+  try {
+    let query = supabase
+      .from('social_connections')
+      .select('*');
+      
+    // Only filter by user_id if it's provided
+    if (userId) {
+      query = query.eq('user_id', userId);
     }
+      
+    const { data, error } = await query;
 
-    loadData();
-  }, []);
+    if (error) throw error;
+    return data as SocialConnection[];
+  } catch (error) {
+    console.error(`Error fetching social connections for user ${userId}:`, error);
+    return [];
+  }
+}
 
-  const getFacebookConnection = () => {
-    return socialConnections.find(conn => conn.fb_page_id);
-  };
-  
-  const getInstagramConnection = () => {
-    return socialConnections.find(conn => conn.ig_account_id);
-  };
-
-  const handleFacebookConnect = async () => {
-    setFbConnecting(true);
-    try {
-      // First check if user is already logged in to Facebook
-      if (typeof FB !== 'undefined') {
-        const statusResponse = await checkFacebookLoginStatus();
-        
-        if (statusResponse.status === 'connected') {
-          // User already logged in to Facebook
-          const success = await handleFacebookStatusChange(statusResponse);
-          if (success) {
-            // Handle success - normally we'd continue to page selection
-            // But for this demo, we'll just redirect to the callback URL
-            window.location.href = `${window.location.origin}/oauth/facebook/callback?code=demo_code`;
-            return;
-          }
-        }
-        
-        // If not connected or handling failed, initiate login
-        const loginResponse = await loginWithFacebook();
-        if (loginResponse.status === 'connected') {
-          // If connected after login, redirect to callback
-          window.location.href = `${window.location.origin}/oauth/facebook/callback?code=demo_code`;
-          return;
-        }
-      }
-
-      // Fallback to redirect flow if FB SDK isn't working correctly
-      const redirectUri = `${window.location.origin}/oauth/facebook/callback`;
-      window.location.href = `https://www.facebook.com/v18.0/dialog/oauth?client_id=${import.meta.env.VITE_META_APP_ID}&redirect_uri=${redirectUri}&scope=pages_show_list,pages_messaging`;
-    } catch (err) {
-      console.error('Error connecting to Facebook:', err);
-      setError(err instanceof Error ? err.message : 'Failed to connect to Facebook');
-    } finally {
-      setFbConnecting(false);
+export async function createSocialConnection(connection: Omit<SocialConnection, 'id' | 'created_at'>) {
+  try {
+    if (!connection.user_id) {
+      throw new Error('User ID is required to create a social connection');
     }
-  };
+    
+    const { data, error } = await supabase
+      .from('social_connections')
+      .insert([{
+        user_id: connection.user_id,
+        fb_page_id: connection.fb_page_id,
+        ig_account_id: connection.ig_account_id,
+        access_token: connection.access_token,
+        token_expiry: connection.token_expiry
+      }])
+      .select();
 
-  const handleInstagramConnect = () => {
-    const redirectUri = `${window.location.origin}/oauth/instagram/callback`;
-    window.location.href = `https://api.instagram.com/oauth/authorize?client_id=${import.meta.env.VITE_META_APP_ID}&redirect_uri=${redirectUri}&scope=instagram_basic,instagram_manage_messages&response_type=code`;
-  };
-  
-  const handleDisconnectSocial = async (connectionId: string) => {
+    if (error) throw error;
+    return data[0] as SocialConnection;
+  } catch (error) {
+    console.error("Error creating social connection:", error);
+    throw error;
+  }
+}
+
+export async function refreshSocialConnectionToken(connectionId: string, newExpiryDate: string) {
+  try {
     if (!connectionId) {
-      setError("No connection ID provided");
-      return;
+      throw new Error('Connection ID is required to refresh token');
     }
     
-    if (!confirm('Are you sure you want to disconnect this account?')) return;
+    const { data, error } = await supabase
+      .from('social_connections')
+      .update({
+        token_expiry: newExpiryDate,
+        refreshed_at: new Date().toISOString()
+      })
+      .eq('id', connectionId)
+      .select();
+
+    if (error) throw error;
+    return data[0] as SocialConnection;
+  } catch (error) {
+    console.error(`Error refreshing token for connection ${connectionId}:`, error);
+    throw error;
+  }
+}
+
+// Function to get token refresh history for a user
+export async function getTokenRefreshHistory(userId: string): Promise<TokenRefreshHistory[]> {
+  try {
+    if (!userId) {
+      console.warn('No user ID provided for token refresh history');
+      return [];
+    }
     
+    const { data, error } = await supabase
+      .from('social_connections')
+      .select('*')
+      .eq('user_id', userId)
+      .not('refreshed_at', 'is', null);
+
+    if (error) throw error;
+    if (!data) return [];
+
+    // Convert social connections with refresh history to TokenRefreshHistory objects
+    return data.map(conn => ({
+      connectionId: conn.id,
+      platformType: conn.fb_page_id ? 'Facebook' : 'Instagram',
+      platformId: conn.fb_page_id || conn.ig_account_id || '',
+      lastRefreshed: conn.refreshed_at || '',
+      currentExpiry: conn.token_expiry
+    })) as TokenRefreshHistory[];
+  } catch (error) {
+    console.error(`Error fetching token refresh history for user ${userId}:`, error);
+    return [];
+  }
+}
+
+// Voiceflow mappings
+export async function getVoiceflowMappings() {
+  try {
+    const { data, error } = await supabase
+      .from('voiceflow_mappings')
+      .select('*');
+
+    if (error) throw error;
+    return data as VoiceflowMapping[];
+  } catch (error) {
+    console.error("Error fetching Voiceflow mappings:", error);
+    return [];
+  }
+}
+
+export async function getVoiceflowMappingByUserId(userId: string) {
+  try {
+    let query = supabase
+      .from('voiceflow_mappings')
+      .select('*');
+      
+    // Only filter by user_id if it's provided  
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+    
+    const { data, error } = await query.maybeSingle();
+
+    if (error) throw error;
+    return data as VoiceflowMapping | null;
+  } catch (error) {
+    console.error(`Error fetching Voiceflow mapping for user ${userId}:`, error);
+    throw error;
+  }
+}
+
+// Voiceflow API keys (admin only)
+export async function getVoiceflowApiKeys() {
+  try {
+    const { data, error } = await supabase
+      .from('voiceflow_api_keys')
+      .select('*');
+
+    if (error) throw error;
+    return data as VoiceflowApiKey[];
+  } catch (error) {
+    console.error("Error fetching Voiceflow API keys:", error);
+    return [];
+  }
+}
+
+export async function getVoiceflowApiKeyByUserId(userId: string) {
+  try {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    const { data, error } = await supabase
+      .from('voiceflow_api_keys')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data as VoiceflowApiKey | null;
+  } catch (error) {
+    console.error(`Error fetching Voiceflow API key for user ${userId}:`, error);
+    throw error;
+  }
+}
+
+export async function createVoiceflowApiKey(apiKey: Omit<VoiceflowApiKey, 'id' | 'created_at' | 'updated_at'>) {
+  try {
+    if (!apiKey.user_id || !apiKey.api_key) {
+      throw new Error('User ID and API key are required');
+    }
+
+    // First check if a key already exists for this user
+    const existingKey = await getVoiceflowApiKeyByUserId(apiKey.user_id);
+    
+    if (existingKey) {
+      // Update existing key
+      return await updateVoiceflowApiKey(existingKey.id, { api_key: apiKey.api_key });
+    }
+    
+    // Create new key
+    const { data, error } = await supabase
+      .from('voiceflow_api_keys')
+      .insert([{
+        user_id: apiKey.user_id,
+        api_key: apiKey.api_key
+      }])
+      .select();
+
+    if (error) throw error;
+    return data[0] as VoiceflowApiKey;
+  } catch (error) {
+    console.error("Error creating/updating Voiceflow API key:", error);
+    throw error;
+  }
+}
+
+export async function updateVoiceflowApiKey(id: string, apiKey: Partial<VoiceflowApiKey>) {
+  try {
+    if (!id) {
+      throw new Error('API key ID is required to update');
+    }
+    
+    const updatedData = {
+      ...apiKey,
+      updated_at: new Date().toISOString()
+    };
+    
+    const { data, error } = await supabase
+      .from('voiceflow_api_keys')
+      .update(updatedData)
+      .eq('id', id)
+      .select();
+
+    if (error) throw error;
+    return data[0] as VoiceflowApiKey;
+  } catch (error) {
+    console.error(`Error updating Voiceflow API key ${id}:`, error);
+    throw error;
+  }
+}
+
+export async function createVoiceflowMapping(mapping: Omit<VoiceflowMapping, 'id' | 'created_at'>) {
+  try {
+    if (!mapping.user_id || !mapping.vf_project_id) {
+      throw new Error('User ID and Voiceflow project ID are required');
+    }
+    
+    // First check if a mapping already exists for this user
+    const existingMapping = await getVoiceflowMappingByUserId(mapping.user_id);
+    
+    if (existingMapping) {
+      // Update existing mapping
+      return await updateVoiceflowMapping(existingMapping.id, {
+        vf_project_id: mapping.vf_project_id,
+        flowbridge_config: mapping.flowbridge_config
+      });
+    }
+    
+    // Create new mapping
+    const { data, error } = await supabase
+      .from('voiceflow_mappings')
+      .insert([{
+        user_id: mapping.user_id,
+        vf_project_id: mapping.vf_project_id,
+        flowbridge_config: mapping.flowbridge_config || {}
+      }])
+      .select();
+
+    if (error) throw error;
+    return data[0] as VoiceflowMapping;
+  } catch (error) {
+    console.error("Error creating/updating Voiceflow mapping:", error);
+    throw error;
+  }
+}
+
+export async function updateVoiceflowMapping(id: string, mapping: Partial<VoiceflowMapping>) {
+  try {
+    if (!id) {
+      throw new Error('Mapping ID is required to update');
+    }
+    
+    const { data, error } = await supabase
+      .from('voiceflow_mappings')
+      .update(mapping)
+      .eq('id', id)
+      .select();
+
+    if (error) throw error;
+    return data[0] as VoiceflowMapping;
+  } catch (error) {
+    console.error(`Error updating Voiceflow mapping ${id}:`, error);
+    throw error;
+  }
+}
+
+// Webhook configs
+export async function getWebhookConfigs() {
+  try {
+    const { data, error } = await supabase
+      .from('webhook_configs')
+      .select(`
+        *,
+        user:users(
+          id,
+          email,
+          role
+        ),
+        voiceflow_mapping:voiceflow_mappings(
+          id,
+          vf_project_id
+        ),
+        social_connections:social_connections(
+          id,
+          fb_page_id,
+          ig_account_id
+        )
+      `);
+
+    if (error) throw error;
+    return data as WebhookConfig[];
+  } catch (error) {
+    console.error("Error fetching webhook configs:", error);
+    return [];
+  }
+}
+
+export async function getWebhookConfigByUserId(userId: string, platform?: 'all' | 'facebook' | 'instagram') {
+  try {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    let query = supabase
+      .from('webhook_configs')
+      .select(`
+        *,
+        voiceflow_mapping:voiceflow_mappings(
+          id,
+          vf_project_id
+        ),
+        social_connections:social_connections(
+          id,
+          fb_page_id,
+          ig_account_id,
+          access_token
+        )
+      `)
+      .eq('user_id', userId);
+      
+    if (platform) {
+      query = query.eq('platform', platform);
+    }
+    
+    const { data, error } = await query.maybeSingle();
+
+    if (error) throw error;
+    return data as WebhookConfig | null;
+  } catch (error) {
+    console.error(`Error fetching webhook config for user ${userId}:`, error);
+    throw error;
+  }
+}
+
+export async function getWebhookConfigsByUserId(userId: string) {
+  try {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    const { data, error } = await supabase
+      .from('webhook_configs')
+      .select(`
+        *,
+        voiceflow_mapping:voiceflow_mappings(
+          id,
+          vf_project_id
+        ),
+        social_connections:social_connections(
+          id,
+          fb_page_id,
+          ig_account_id,
+          access_token
+        )
+      `)
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    return data as WebhookConfig[];
+  } catch (error) {
+    console.error(`Error fetching webhook configs for user ${userId}:`, error);
+    throw error;
+  }
+}
+
+export async function createWebhookConfig(config: Omit<WebhookConfig, 'id' | 'created_at' | 'updated_at'>) {
+  try {
+    if (!config.user_id) {
+      throw new Error('User ID is required to create a webhook config');
+    }
+
+    // Check if a webhook config already exists for this user and platform
+    const existingConfig = await getWebhookConfigByUserId(config.user_id, config.platform);
+    
+    if (existingConfig) {
+      // Update existing config
+      return await updateWebhookConfig(existingConfig.id, {
+        webhook_url: config.webhook_url,
+        verification_token: config.verification_token,
+        is_active: config.is_active,
+        webhook_name: config.webhook_name,
+        generated_url: config.generated_url
+      });
+    }
+    
+    // Create new config
+    const { data, error } = await supabase
+      .from('webhook_configs')
+      .insert([{
+        user_id: config.user_id,
+        webhook_url: config.webhook_url,
+        verification_token: config.verification_token,
+        is_active: config.is_active !== undefined ? config.is_active : false,
+        platform: config.platform || 'all',
+        webhook_name: config.webhook_name,
+        generated_url: config.generated_url
+      }])
+      .select();
+
+    if (error) throw error;
+    return data[0] as WebhookConfig;
+  } catch (error) {
+    console.error("Error creating webhook config:", error);
+    throw error;
+  }
+}
+
+export async function updateWebhookConfig(id: string, config: Partial<WebhookConfig>) {
+  try {
+    if (!id) {
+      throw new Error('Webhook config ID is required to update');
+    }
+    
+    const updateData = {
+      ...config,
+      updated_at: new Date().toISOString()
+    };
+    
+    const { data, error } = await supabase
+      .from('webhook_configs')
+      .update(updateData)
+      .eq('id', id)
+      .select(`
+        *,
+        voiceflow_mapping:voiceflow_mappings(
+          id,
+          vf_project_id
+        ),
+        social_connections:social_connections(
+          id,
+          fb_page_id,
+          ig_account_id,
+          access_token
+        )
+      `);
+
+    if (error) throw error;
+    return data[0] as WebhookConfig;
+  } catch (error) {
+    console.error(`Error updating webhook config ${id}:`, error);
+    throw error;
+  }
+}
+
+// Conversations
+export async function getConversations() {
+  try {
+    const { data, error } = await supabase
+      .from('conversations')
+      .select(`
+        *,
+        messages:messages(
+          content,
+          sender_type,
+          sent_at
+        )
+      `)
+      .order('last_message_at', { ascending: false })
+      .limit(1, { foreignTable: 'messages' });
+
+    if (error) throw error;
+    if (!data) return [];
+    
+    // Transform the data to include the latest message
+    return data.map(conv => ({
+      ...conv,
+      latest_message: conv.messages && conv.messages.length > 0 ? conv.messages[0] : null,
+      // Remove the messages array from the conversation object
+      messages: undefined
+    })) as Conversation[];
+  } catch (error) {
+    console.error("Error fetching conversations:", error);
+    return [];
+  }
+}
+
+export async function getConversationsByUserId(userId: string) {
+  try {
+    if (!userId) {
+      console.warn('No user ID provided for conversations');
+      return [];
+    }
+    
+    const { data, error } = await supabase
+      .from('conversations')
+      .select(`
+        *,
+        messages:messages(
+          content,
+          sender_type,
+          sent_at
+        )
+      `)
+      .eq('user_id', userId)
+      .order('last_message_at', { ascending: false })
+      .limit(1, { foreignTable: 'messages' });
+
+    if (error) throw error;
+    if (!data) return [];
+    
+    // Transform the data to include the latest message
+    return data.map(conv => ({
+      ...conv,
+      latest_message: conv.messages && conv.messages.length > 0 ? conv.messages[0] : null,
+      // Remove the messages array from the conversation object
+      messages: undefined
+    })) as Conversation[];
+  } catch (error) {
+    console.error(`Error fetching conversations for user ${userId}:`, error);
+    return [];
+  }
+}
+
+export async function getConversation(id: string) {
+  try {
+    if (!id) {
+      throw new Error('Conversation ID is required');
+    }
+    
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    return data as Conversation;
+  } catch (error) {
+    console.error(`Error fetching conversation ${id}:`, error);
+    throw error;
+  }
+}
+
+export async function createConversation(conversation: Omit<Conversation, 'id' | 'created_at'>) {
+  try {
+    if (!conversation.user_id || !conversation.platform || !conversation.external_id || !conversation.participant_id) {
+      throw new Error('Required conversation fields are missing');
+    }
+    
+    const { data, error } = await supabase
+      .from('conversations')
+      .insert([{
+        user_id: conversation.user_id,
+        platform: conversation.platform,
+        external_id: conversation.external_id,
+        participant_id: conversation.participant_id,
+        participant_name: conversation.participant_name,
+        last_message_at: conversation.last_message_at || new Date().toISOString()
+      }])
+      .select();
+
+    if (error) throw error;
+    return data[0] as Conversation;
+  } catch (error) {
+    console.error("Error creating conversation:", error);
+    throw error;
+  }
+}
+
+export async function updateConversation(id: string, updates: Partial<Conversation>) {
+  try {
+    if (!id) {
+      throw new Error('Conversation ID is required for update');
+    }
+    
+    const { data, error } = await supabase
+      .from('conversations')
+      .update(updates)
+      .eq('id', id)
+      .select();
+
+    if (error) throw error;
+    return data[0] as Conversation;
+  } catch (error) {
+    console.error(`Error updating conversation ${id}:`, error);
+    throw error;
+  }
+}
+
+// Messages
+export async function getMessages(conversationId: string) {
+  try {
+    if (!conversationId) {
+      console.warn('No conversation ID provided for messages');
+      return [];
+    }
+    
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('sent_at', { ascending: true });
+
+    if (error) throw error;
+    return data as Message[];
+  } catch (error) {
+    console.error(`Error fetching messages for conversation ${conversationId}:`, error);
+    return [];
+  }
+}
+
+export async function createMessage(message: Omit<Message, 'id' | 'created_at'>) {
+  try {
+    if (!message.conversation_id || !message.content || !message.sender_type) {
+      throw new Error('Required message fields are missing');
+    }
+    
+    const { data, error } = await supabase
+      .from('messages')
+      .insert([{
+        conversation_id: message.conversation_id,
+        content: message.content,
+        sender_type: message.sender_type,
+        external_id: message.external_id,
+        sent_at: message.sent_at || new Date().toISOString()
+      }])
+      .select();
+
+    if (error) throw error;
+    
+    // Update the conversation's last_message_at timestamp
     try {
-      const { error } = await supabase
-        .from('social_connections')
-        .delete()
-        .eq('id', connectionId);
+      await supabase
+        .from('conversations')
+        .update({ last_message_at: message.sent_at || new Date().toISOString() })
+        .eq('id', message.conversation_id);
+    } catch (updateError) {
+      console.error(`Error updating conversation timestamp for ${message.conversation_id}:`, updateError);
+      // Continue even if this fails
+    }
+      
+    return data[0] as Message;
+  } catch (error) {
+    console.error("Error creating message:", error);
+    throw error;
+  }
+}
+
+// API Rate Limiting
+export async function trackApiCall(userId: string, platform: string, endpoint: string) {
+  try {
+    if (!userId || !platform || !endpoint) {
+      console.warn('Missing required parameters for API call tracking');
+      return null;
+    }
+    
+    const today = new Date();
+    const resetDate = new Date(today);
+    resetDate.setHours(0, 0, 0, 0);
+    resetDate.setDate(resetDate.getDate() + 1); // Reset at midnight
+    
+    // Check if we already have a rate limit record for today
+    const { data: existingData, error: checkError } = await supabase
+      .from('api_rate_limits')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('platform', platform)
+      .eq('endpoint', endpoint)
+      .gte('reset_at', today.toISOString())
+      .single();
+    
+    if (checkError && checkError.code !== 'PGRST116') { // PGRST116 is "not found" error, which is expected
+      throw checkError;
+    }
+      
+    if (existingData) {
+      // Update existing record
+      const { data, error } = await supabase
+        .from('api_rate_limits')
+        .update({
+          calls_made: existingData.calls_made + 1
+        })
+        .eq('id', existingData.id)
+        .select();
         
       if (error) throw error;
-      
-      // Update the list by removing the deleted connection
-      setSocialConnections(prevConnections => 
-        prevConnections.filter(conn => conn.id !== connectionId)
-      );
-      
-      alert('Successfully disconnected account');
-    } catch (error) {
-      console.error('Error disconnecting account:', error);
-      setError(error instanceof Error ? error.message : 'Failed to disconnect account');
-    }
-  };
-  
-  const formatDate = (dateString: string) => {
-    if (!dateString) return 'N/A';
-    const date = new Date(dateString);
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
-  };
-  
-  const getExpiryStatusClass = (expiryDate: string) => {
-    const daysRemaining = getDaysUntilExpiry(expiryDate);
-    if (daysRemaining <= 5) return 'text-red-600';
-    if (daysRemaining <= 14) return 'text-yellow-600';
-    return 'text-green-600';
-  };
-  
-  const getExpiryStatus = (expiryDate: string) => {
-    const daysRemaining = getDaysUntilExpiry(expiryDate);
-    if (daysRemaining <= 0) return 'Expired';
-    if (daysRemaining === 1) return '1 day remaining';
-    return `${daysRemaining} days remaining`;
-  };
-  
-  const handleRefreshAllTokens = async () => {
-    setRefreshingTokens(true);
-    setRefreshResults([]);
-    setError(null);
-    
-    try {
-      const results = await checkAndRefreshTokens();
-      if (results && results.length > 0) {
-        setRefreshResults(results);
+      return data[0] as ApiRateLimit;
+    } else {
+      // Create new record
+      const { data, error } = await supabase
+        .from('api_rate_limits')
+        .insert([{
+          user_id: userId,
+          platform,
+          endpoint,
+          calls_made: 1,
+          reset_at: resetDate.toISOString()
+        }])
+        .select();
         
-        // Reload connections to show updated expiry dates
-        const connections = await getSocialConnections();
-        setSocialConnections(connections);
-        
-        // Reload refresh history
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          const history = await getTokenRefreshHistory(user.id);
-          setRefreshHistory(history);
-        }
-      } else {
-        // No tokens needed refreshing
-        setRefreshResults([{
-          id: 'none',
-          platform: 'none',
-          status: 'success',
-          new_expiry: 'No tokens needed refreshing'
-        }]);
-      }
-    } catch (error) {
-      console.error('Error refreshing tokens:', error);
-      setError(error instanceof Error ? error.message : 'Failed to refresh tokens');
-    } finally {
-      setRefreshingTokens(false);
+      if (error) throw error;
+      return data[0] as ApiRateLimit;
     }
-  };
-  
-  const handleRefreshSingleToken = async (connectionId: string) => {
-    if (!connectionId) {
-      setError("No connection ID provided");
-      return;
-    }
-    
-    setRefreshingTokens(true);
-    setRefreshResults([]);
-    setError(null);
-    
-    try {
-      const refreshedConnection = await manuallyRefreshToken(connectionId);
-      
-      // Create refresh result
-      setRefreshResults([{
-        id: connectionId,
-        platform: refreshedConnection.fb_page_id ? 'facebook' : 'instagram',
-        status: 'success',
-        new_expiry: refreshedConnection.token_expiry
-      }]);
-      
-      // Reload connections to show updated expiry dates
-      const connections = await getSocialConnections();
-      setSocialConnections(connections);
-      
-      // Reload refresh history
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const history = await getTokenRefreshHistory(user.id);
-        setRefreshHistory(history);
-      }
-    } catch (error) {
-      console.error('Error refreshing token:', error);
-      setError(error instanceof Error ? error.message : 'Failed to refresh token');
-      setRefreshResults([{
-        id: connectionId,
-        platform: 'unknown',
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error'
-      }]);
-    } finally {
-      setRefreshingTokens(false);
-    }
-  };
-
-  const handleDataDeletion = () => {
-    if (window.confirm('Are you sure you want to request deletion of all your data? This action cannot be undone.')) {
-      // In a real implementation, you would call your API to initiate the data deletion process
-      window.location.href = '/deletion-status?code=MANUAL' + Math.random().toString(36).substring(2, 10).toUpperCase();
-    }
-  };
-
-  const getTabsForUser = () => {
-    // Base tabs every user should see
-    const tabs = [
-      { id: 'connections', label: 'Social Connections' },
-      { id: 'token-management', label: 'Token Management' },
-      { id: 'privacy', label: 'Privacy & Data' }
-    ];
-    
-    return tabs;
-  };
-
-  if (loading) {
-    return <LoadingIndicator message="Loading settings..." />;
+  } catch (error) {
+    console.error(`Error tracking API call for ${userId}/${platform}/${endpoint}:`, error);
+    // Don't throw, just report the error and return null
+    return null;
   }
+}
 
-  return (
-    <div className="space-y-6">
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
-          {getTabsForUser().map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`${
-                activeTab === tab.id
-                  ? 'border-indigo-500 text-indigo-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </div>
+export async function checkRateLimit(userId: string, platform: string, endpoint: string, limit: number) {
+  try {
+    if (!userId || !platform || !endpoint) {
+      console.warn('Missing required parameters for rate limit check');
+      return true; // Allow the request if we can't check properly
+    }
+    
+    const today = new Date();
+    
+    // Get current rate limit usage
+    const { data, error } = await supabase
+      .from('api_rate_limits')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('platform', platform)
+      .eq('endpoint', endpoint)
+      .gte('reset_at', today.toISOString())
+      .single();
+      
+    if (error && error.code !== 'PGRST116') { // PGRST116 is not found error
+      throw error;
+    }
+    
+    // If no data or calls_made < limit, we're good
+    if (!data || data.calls_made < limit) {
+      return true;
+    }
+    
+    // We've hit the limit
+    return false;
+  } catch (error) {
+    console.error(`Error checking rate limit for ${userId}/${platform}/${endpoint}:`, error);
+    return true; // Allow the request if the check fails
+  }
+}
 
-      {error && (
-        <ErrorAlert 
-          message="Error" 
-          details={error} 
-          onDismiss={() => setError(null)} 
-        />
-      )}
+// Analytics functions
+export async function getMessageAnalytics(userId: string, daysBack = 7): Promise<MessageAnalytics[]> {
+  try {
+    if (!userId) {
+      console.warn('No user ID provided for message analytics');
+      return createEmptyAnalytics(daysBack);
+    }
+    
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - daysBack);
+    
+    // First get all conversations for the user
+    const { data: conversations, error: conversationsError } = await supabase
+      .from('conversations')
+      .select('id, platform')
+      .eq('user_id', userId);
       
-      {activeTab === 'connections' && (
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Social Media Connections</h3>
-            <div className="mt-5 space-y-4">
-              <div className="border rounded-md overflow-hidden">
-                <div className="bg-gray-50 px-4 py-3 border-b">
-                  <h4 className="text-sm font-medium text-gray-700">Facebook Pages</h4>
-                </div>
-                
-                {getFacebookConnection() ? (
-                  <div className="p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center">
-                        <Facebook className="h-5 w-5 text-blue-600 mr-2" />
-                        <span className="text-sm text-gray-900">
-                          Connected to Page ID: {getFacebookConnection()?.fb_page_id}
-                        </span>
-                      </div>
-                      <div className="flex items-center">
-                        <span className={`text-xs mr-3 flex items-center ${getExpiryStatusClass(getFacebookConnection()?.token_expiry || '')}`}>
-                          <Clock className="h-4 w-4 mr-1" />
-                          {getExpiryStatus(getFacebookConnection()?.token_expiry || '')}
-                        </span>
-                        <button
-                          onClick={() => handleDisconnectSocial(getFacebookConnection()?.id || '')}
-                          className="text-red-600 hover:text-red-800"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-4">
-                    {/* Only show the direct manual button (no FB SDK button) */}
-                    <button
-                      onClick={handleFacebookConnect}
-                      disabled={fbConnecting}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
-                    >
-                      {fbConnecting ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                          Connecting...
-                        </>
-                      ) : (
-                        <>
-                          <Facebook className="h-5 w-5 mr-2" />
-                          Connect Facebook Page
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
-              
-              <div className="border rounded-md overflow-hidden">
-                <div className="bg-gray-50 px-4 py-3 border-b">
-                  <h4 className="text-sm font-medium text-gray-700">Instagram Business Account</h4>
-                </div>
-                
-                {getInstagramConnection() ? (
-                  <div className="p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center">
-                        <Instagram className="h-5 w-5 text-pink-600 mr-2" />
-                        <span className="text-sm text-gray-900">
-                          Connected to Account ID: {getInstagramConnection()?.ig_account_id}
-                        </span>
-                      </div>
-                      <div className="flex items-center">
-                        <span className={`text-xs mr-3 flex items-center ${getExpiryStatusClass(getInstagramConnection()?.token_expiry || '')}`}>
-                          <Clock className="h-4 w-4 mr-1" />
-                          {getExpiryStatus(getInstagramConnection()?.token_expiry || '')}
-                        </span>
-                        <button
-                          onClick={() => handleDisconnectSocial(getInstagramConnection()?.id || '')}
-                          className="text-red-600 hover:text-red-800"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-4">
-                    <button
-                      onClick={handleInstagramConnect}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-pink-600 hover:bg-pink-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-pink-500"
-                    >
-                      <Instagram className="h-5 w-5 mr-2" />
-                      Connect Instagram Account
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+    if (conversationsError) throw conversationsError;
+    if (!conversations || conversations.length === 0) {
+      // No conversations found, return empty data
+      return createEmptyAnalytics(daysBack);
+    }
+    
+    // Extract conversation IDs
+    const conversationIds = conversations.map(c => c.id);
+    
+    // Now query messages for these conversations
+    const { data, error } = await supabase
+      .from('messages')
+      .select(`
+        id,
+        sent_at,
+        sender_type,
+        conversation_id
+      `)
+      .in('conversation_id', conversationIds)
+      .gte('sent_at', startDate.toISOString());
       
-      {activeTab === 'token-management' && (
-        <div className="space-y-6">
-          <div className="bg-white shadow rounded-lg">
-            <div className="px-4 py-5 sm:p-6">
-              <div className="flex justify-between items-center">
-                <h3 className="text-lg leading-6 font-medium text-gray-900">Token Management</h3>
-                <button
-                  onClick={handleRefreshAllTokens}
-                  disabled={refreshingTokens || socialConnections.length === 0}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
-                >
-                  {refreshingTokens ? (
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  ) : (
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                  )}
-                  Refresh All Tokens
-                </button>
-              </div>
-              <p className="mt-2 text-sm text-gray-500">
-                Manage your social media access tokens. Tokens are automatically refreshed 7 days before expiry.
-              </p>
-              
-              {refreshResults.length > 0 && (
-                <div className={`mt-4 p-4 rounded-md ${
-                  refreshResults.some(r => r.status === 'error') 
-                    ? 'bg-red-50' 
-                    : 'bg-green-50'
-                }`}>
-                  <h4 className="text-sm font-medium mb-2">
-                    {refreshResults.some(r => r.status === 'error')
-                      ? 'Token Refresh Results (with errors)'
-                      : 'Token Refresh Successful'}
-                  </h4>
-                  <ul className="space-y-2">
-                    {refreshResults.map((result, idx) => (
-                      result.id !== 'none' ? (
-                        <li key={idx} className="text-sm">
-                          {result.status === 'success' ? (
-                            <span className="text-green-700">
-                              ✓ {result.platform} token refreshed. New expiry: {formatDate(result.new_expiry || '')}
-                            </span>
-                          ) : (
-                            <span className="text-red-700">
-                              ✗ Failed to refresh {result.platform} token: {result.error}
-                            </span>
-                          )}
-                        </li>
-                      ) : (
-                        <li key={idx} className="text-sm text-gray-700">
-                          No tokens needed refreshing at this time.
-                        </li>
-                      )
-                    ))}
-                  </ul>
-                </div>
-              )}
-              
-              <div className="mt-6">
-                <h4 className="text-md font-medium text-gray-900 mb-3">Active Social Connections</h4>
-                {socialConnections.length === 0 ? (
-                  <div className="text-center p-6 bg-gray-50 rounded-md">
-                    <AlertTriangle className="h-10 w-10 text-yellow-500 mx-auto mb-2" />
-                    <p className="text-gray-500">No social connections found</p>
-                    <p className="text-sm text-gray-400 mt-1">
-                      Connect at least one social account to manage tokens
-                    </p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Platform
-                          </th>
-                          <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            ID
-                          </th>
-                          <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Token Expiry
-                          </th>
-                          <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Last Refreshed
-                          </th>
-                          <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {socialConnections.map((connection) => (
-                          <tr key={connection.id}>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="flex items-center">
-                                {connection.fb_page_id ? (
-                                  <Facebook className="h-5 w-5 text-blue-600 mr-2" />
-                                ) : (
-                                  <Instagram className="h-5 w-5 text-pink-600 mr-2" />
-                                )}
-                                <span className="text-sm text-gray-900">
-                                  {connection.fb_page_id ? 'Facebook' : 'Instagram'}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {connection.fb_page_id || connection.ig_account_id}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <span className={`text-sm ${getExpiryStatusClass(connection.token_expiry)}`}>
-                                {formatDate(connection.token_expiry)}
-                                <br />
-                                <span className="text-xs">
-                                  {getExpiryStatus(connection.token_expiry)}
-                                </span>
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {connection.refreshed_at ? formatDate(connection.refreshed_at) : 'Never'}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                              <button
-                                onClick={() => handleRefreshSingleToken(connection.id)}
-                                disabled={refreshingTokens}
-                                className="text-indigo-600 hover:text-indigo-900 mr-4 inline-flex items-center"
-                              >
-                                <RefreshCw className="h-4 w-4 mr-1" />
-                                Refresh
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+    if (error) throw error;
+    
+    // Create a map of conversation id to platform
+    const platformMap = conversations.reduce((map, conv) => {
+      map[conv.id] = conv.platform;
+      return map;
+    }, {} as Record<string, string>);
+    
+    // Process data to get counts by day and platform
+    const messagesByDay = initializeMessagesByDay(daysBack);
+    
+    // Fill in the data
+    if (data && data.length > 0) {
+      data.forEach(message => {
+        const day = new Date(message.sent_at).toLocaleDateString();
+        if (messagesByDay[day]) {
+          messagesByDay[day].total += 1;
           
-          <div className="bg-white shadow rounded-lg">
-            <div className="px-4 py-5 sm:p-6">
-              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Token Refresh History</h3>
-              
-              {refreshHistory.length === 0 ? (
-                <div className="text-center p-6 bg-gray-50 rounded-md">
-                  <p className="text-gray-500">No token refresh history yet</p>
-                  <p className="text-sm text-gray-400 mt-1">
-                    History will be recorded when tokens are refreshed
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Platform
-                        </th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          ID
-                        </th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Last Refreshed
-                        </th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Current Expiry
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {refreshHistory.map((history, index) => (
-                        <tr key={index}>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center">
-                              {history.platformType === 'Facebook' ? (
-                                <Facebook className="h-5 w-5 text-blue-600 mr-2" />
-                              ) : (
-                                <Instagram className="h-5 w-5 text-pink-600 mr-2" />
-                              )}
-                              <span className="text-sm text-gray-900">
-                                {history.platformType}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {history.platformId}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {formatDate(history.lastRefreshed)}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className={`text-sm ${getExpiryStatusClass(history.currentExpiry)}`}>
-                              {formatDate(history.currentExpiry)}
-                              <br />
-                              <span className="text-xs">
-                                {getExpiryStatus(history.currentExpiry)}
-                              </span>
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+          // Count by platform
+          const platform = platformMap[message.conversation_id];
+          if (platform === 'facebook') {
+            messagesByDay[day].facebook += 1;
+          } else if (platform === 'instagram') {
+            messagesByDay[day].instagram += 1;
+          }
+          
+          // Count by sender type
+          if (message.sender_type === 'user') {
+            messagesByDay[day].user += 1;
+          } else if (message.sender_type === 'assistant') {
+            messagesByDay[day].assistant += 1;
+          }
+        }
+      });
+    }
+    
+    // Format the result
+    return formatMessageAnalytics(messagesByDay);
+  } catch (error) {
+    console.error('Error in getMessageAnalytics:', error);
+    // Return empty data on error
+    return createEmptyAnalytics(daysBack);
+  }
+}
 
-      {activeTab === 'privacy' && (
-        <div className="space-y-6">
-          <div className="bg-white shadow rounded-lg">
-            <div className="px-4 py-5 sm:p-6">
-              <h3 className="text-lg leading-6 font-medium text-gray-900">Privacy and Data Management</h3>
-              <p className="mt-2 text-sm text-gray-500">
-                Manage your data and privacy settings. You can request deletion of your data at any time.
-              </p>
+// Helper function to initialize message counts by day
+function initializeMessagesByDay(daysBack: number) {
+  const messagesByDay: Record<string, { 
+    total: number, 
+    facebook: number, 
+    instagram: number, 
+    user: number, 
+    assistant: number 
+  }> = {};
+  
+  for (let i = 0; i < daysBack; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const day = date.toLocaleDateString();
+    
+    messagesByDay[day] = {
+      total: 0,
+      facebook: 0,
+      instagram: 0,
+      user: 0,
+      assistant: 0
+    };
+  }
+  
+  return messagesByDay;
+}
 
-              <div className="mt-6 border-t border-gray-200 pt-6">
-                <h4 className="text-md font-medium text-gray-900">Data Deletion</h4>
-                <p className="mt-2 text-sm text-gray-500">
-                  You can request the deletion of all your data from our system. This action cannot be undone.
-                </p>
-                <div className="mt-4">
-                  <button
-                    onClick={handleDataDeletion}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    Delete My Data
-                  </button>
-                </div>
-              </div>
+// Helper function to create empty analytics data
+function createEmptyAnalytics(daysBack: number): MessageAnalytics[] {
+  const result: MessageAnalytics[] = [];
+  
+  for (let i = 0; i < daysBack; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const day = date.toLocaleDateString();
+    
+    result.push({
+      name: new Intl.DateTimeFormat('en', { weekday: 'short' }).format(date),
+      date: day,
+      messages: 0,
+      facebook: 0,
+      instagram: 0,
+      userMessages: 0,
+      assistantMessages: 0
+    });
+  }
+  
+  // Sort by date (oldest to newest)
+  return result.sort((a, b) => {
+    return new Date(a.date).getTime() - new Date(b.date).getTime();
+  });
+}
 
-              <div className="mt-6 border-t border-gray-200 pt-6">
-                <h4 className="text-md font-medium text-gray-900">Facebook Data Deletion</h4>
-                <p className="mt-2 text-sm text-gray-500">
-                  When you remove our app from your Facebook settings or remove access to your data in your Facebook account Settings, 
-                  we automatically receive a data deletion request and will remove your Facebook-related data.
-                </p>
-                <p className="mt-2 text-sm text-gray-500">
-                  You can also visit your Facebook settings directly to manage app permissions:
-                </p>
-                <div className="mt-4">
-                  <a
-                    href="https://www.facebook.com/settings?tab=applications"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                  >
-                    <Facebook className="h-4 w-4 mr-2 text-blue-600" />
-                    Manage Facebook Permissions
-                  </a>
-                </div>
-              </div>
+// Helper function to format message analytics
+function formatMessageAnalytics(messagesByDay: Record<string, any>): MessageAnalytics[] {
+  const result: MessageAnalytics[] = [];
+  const days = Object.keys(messagesByDay).sort((a, b) => {
+    return new Date(a).getTime() - new Date(b).getTime();
+  });
+  
+  for (const day of days) {
+    const date = new Date(day);
+    result.push({
+      name: new Intl.DateTimeFormat('en', { weekday: 'short' }).format(date),
+      date: day,
+      messages: messagesByDay[day].total,
+      facebook: messagesByDay[day].facebook,
+      instagram: messagesByDay[day].instagram,
+      userMessages: messagesByDay[day].user,
+      assistantMessages: messagesByDay[day].assistant
+    });
+  }
+  
+  return result;
+}
 
-              <div className="mt-6 border-t border-gray-200 pt-6">
-                <h4 className="text-md font-medium text-gray-900">Privacy Policy</h4>
-                <p className="mt-2 text-sm text-gray-500">
-                  Our privacy policy explains how we collect, use, and protect your data.
-                </p>
-                <div className="mt-4">
-                  <a
-                    href="/privacy-policy"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-indigo-600 hover:text-indigo-500"
-                  >
-                    View Privacy Policy
-                  </a>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+export async function getDashboardStats(userId: string): Promise<DashboardStats> {
+  try {
+    if (!userId) {
+      console.warn('No user ID provided for dashboard stats');
+      return {
+        messageCount: 0,
+        conversationCount: 0,
+        responseTime: 0,
+        successRate: 0,
+        facebookPercentage: 0,
+        instagramPercentage: 0
+      };
+    }
+    
+    // First get all conversations for the user
+    const { data: conversations, error: conversationsError } = await supabase
+      .from('conversations')
+      .select('id, platform')
+      .eq('user_id', userId);
+      
+    if (conversationsError) throw conversationsError;
+    if (!conversations || conversations.length === 0) {
+      // No conversations, return empty stats
+      return {
+        messageCount: 0,
+        conversationCount: 0,
+        responseTime: 0,
+        successRate: 0,
+        facebookPercentage: 0,
+        instagramPercentage: 0
+      };
+    }
+    
+    // Extract conversation IDs
+    const conversationIds = conversations.map(c => c.id);
+    
+    // Get total message count
+    const { count: messageCount, error: countError } = await supabase
+      .from('messages')
+      .select('id', { count: 'exact', head: true })
+      .in('conversation_id', conversationIds);
+      
+    if (countError) throw countError;
+    
+    // Get conversation count (we already have it from the conversations query)
+    const conversationCount = conversations.length;
+    
+    // Get all messages for the conversations for response time calculation
+    const { data: allMessages, error: messagesError } = await supabase
+      .from('messages')
+      .select('id, conversation_id, sender_type, sent_at')
+      .in('conversation_id', conversationIds)
+      .order('sent_at', { ascending: true });
+      
+    if (messagesError) throw messagesError;
+    
+    // Calculate average response time and success rate
+    const { avgResponseTime, successRate } = calculateResponseMetrics(allMessages, conversationIds);
+    
+    // Calculate platform distribution
+    const { facebookPercentage, instagramPercentage } = calculatePlatformDistribution(conversations);
+    
+    return {
+      messageCount: messageCount || 0,
+      conversationCount: conversationCount || 0,
+      responseTime: avgResponseTime,
+      successRate: successRate,
+      facebookPercentage,
+      instagramPercentage
+    };
+  } catch (error) {
+    console.error('Error getting dashboard stats:', error);
+    // Return default values if there's an error
+    return {
+      messageCount: 0,
+      conversationCount: 0,
+      responseTime: 0,
+      successRate: 0,
+      facebookPercentage: 0,
+      instagramPercentage: 0
+    };
+  }
+}
+
+// Helper function to calculate response time and success rate
+function calculateResponseMetrics(messages: any[] | null, conversationIds: string[]) {
+  // Default values
+  let avgResponseTime = 0;
+  let successRate = 100;
+  
+  if (!messages || messages.length === 0) {
+    return { avgResponseTime, successRate };
+  }
+  
+  // Group messages by conversation
+  const messagesByConversation: Record<string, any[]> = {};
+  conversationIds.forEach(id => { messagesByConversation[id] = []; });
+  
+  messages.forEach(message => {
+    if (messagesByConversation[message.conversation_id]) {
+      messagesByConversation[message.conversation_id].push(message);
+    }
+  });
+  
+  // Calculate response times
+  let totalResponseTime = 0;
+  let responseCount = 0;
+  
+  // Track user messages and responses for success rate
+  let userMessageCount = 0;
+  let respondedUserMessageCount = 0;
+  
+  // Process each conversation
+  Object.values(messagesByConversation).forEach(conversationMessages => {
+    if (conversationMessages.length < 2) return;
+    
+    // Calculate response times and track responses
+    for (let i = 1; i < conversationMessages.length; i++) {
+      const prevMessage = conversationMessages[i-1];
+      const currMessage = conversationMessages[i];
+      
+      // If previous is user and current is assistant, calculate response time
+      if (prevMessage.sender_type === 'user' && currMessage.sender_type === 'assistant') {
+        const prevTime = new Date(prevMessage.sent_at).getTime();
+        const currTime = new Date(currMessage.sent_at).getTime();
+        const responseTime = (currTime - prevTime) / 1000; // in seconds
+        
+        // Only count reasonable response times (< 5 minutes)
+        if (responseTime > 0 && responseTime < 300) {
+          totalResponseTime += responseTime;
+          responseCount++;
+        }
+        
+        respondedUserMessageCount++;
+      }
+      
+      // Count user messages
+      if (prevMessage.sender_type === 'user') {
+        userMessageCount++;
+      }
+    }
+    
+    // Count the last message if it's from a user
+    const lastMessage = conversationMessages[conversationMessages.length - 1];
+    if (lastMessage.sender_type === 'user') {
+      userMessageCount++;
+    }
+  });
+  
+  // Calculate average response time
+  if (responseCount > 0) {
+    avgResponseTime = totalResponseTime / responseCount;
+  }
+  
+  // Calculate success rate
+  if (userMessageCount > 0) {
+    successRate = (respondedUserMessageCount / userMessageCount) * 100;
+  }
+  
+  return { avgResponseTime, successRate };
+}
+
+// Helper function to calculate platform distribution
+function calculatePlatformDistribution(conversations: any[] | null) {
+  if (!conversations || conversations.length === 0) {
+    return { facebookPercentage: 0, instagramPercentage: 0 };
+  }
+  
+  const facebookCount = conversations.filter(c => c.platform === 'facebook').length;
+  const instagramCount = conversations.filter(c => c.platform === 'instagram').length;
+  
+  const totalPlatformCount = facebookCount + instagramCount;
+  const facebookPercentage = totalPlatformCount > 0 ? (facebookCount / totalPlatformCount) * 100 : 0;
+  const instagramPercentage = totalPlatformCount > 0 ? (instagramCount / totalPlatformCount) * 100 : 0;
+  
+  return { facebookPercentage, instagramPercentage };
+}
+
+// Get recent conversations
+export async function getRecentConversations(userId: string, limit = 5) {
+  try {
+    if (!userId) {
+      console.warn('No user ID provided for recent conversations');
+      return [];
+    }
+    
+    const { data, error } = await supabase
+      .from('conversations')
+      .select(`
+        *,
+        messages:messages(
+          content,
+          sender_type,
+          sent_at
+        )
+      `)
+      .eq('user_id', userId)
+      .order('last_message_at', { ascending: false })
+      .limit(limit)
+      .limit(1, { foreignTable: 'messages' });
+
+    if (error) throw error;
+    if (!data || data.length === 0) return [];
+    
+    // Transform the data to include the latest message
+    return data.map(conv => ({
+      ...conv,
+      latest_message: conv.messages && conv.messages.length > 0 ? conv.messages[0] : null,
+      // Remove the messages array from the conversation object
+      messages: undefined
+    })) as Conversation[];
+  } catch (error) {
+    console.error('Error getting recent conversations:', error);
+    return [];
+  }
+}
+
+// Get message volume by hour of day
+export async function getMessageVolumeByHour(userId: string, daysBack = 7) {
+  try {
+    if (!userId) {
+      console.warn('No user ID provided for message volume by hour');
+      return createEmptyHourlyData();
+    }
+    
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - daysBack);
+    
+    // First get all conversations for the user
+    const { data: conversations, error: conversationsError } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('user_id', userId);
+      
+    if (conversationsError) throw conversationsError;
+    if (!conversations || conversations.length === 0) {
+      // No conversations, return empty data
+      return createEmptyHourlyData();
+    }
+    
+    // Extract conversation IDs
+    const conversationIds = conversations.map(c => c.id);
+    
+    // Get all messages for these conversations
+    const { data, error } = await supabase
+      .from('messages')
+      .select('sent_at')
+      .in('conversation_id', conversationIds)
+      .gte('sent_at', startDate.toISOString());
+      
+    if (error) throw error;
+    
+    // Initialize counts for each hour of the day (0-23)
+    const hourCounts = Array(24).fill(0);
+    
+    // Count messages per hour
+    if (data && data.length > 0) {
+      data.forEach(message => {
+        const hour = new Date(message.sent_at).getHours();
+        hourCounts[hour]++;
+      });
+    }
+    
+    // Format the result for recharts
+    return hourCounts.map((count, hour) => ({
+      hour: hour,
+      displayHour: `${hour}:00`,
+      count: count
+    }));
+  } catch (error) {
+    console.error('Error getting message volume by hour:', error);
+    // Return empty data with zero counts for all hours
+    return createEmptyHourlyData();
+  }
+}
+
+// Helper function to create empty hourly data
+function createEmptyHourlyData() {
+  return Array(24).fill(0).map((_, hour) => ({
+    hour: hour,
+    displayHour: `${hour}:00`,
+    count: 0
+  }));
+}
+
+// Admin functions for user management
+export async function getAllUsers() {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .order('created_at', { ascending: false });
+      
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error getting all users:', error);
+    throw error;
+  }
+}
+
+export async function getUserById(userId: string) {
+  try {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+    
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
+      
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error(`Error getting user by ID ${userId}:`, error);
+    throw error;
+  }
+}
+
+export async function getUserSummaries(): Promise<UserSummary[]> {
+  try {
+    // Get all users
+    const { data: users, error: usersError } = await supabase
+      .from('users')
+      .select('*')
+      .order('created_at', { ascending: false });
+      
+    if (usersError) throw usersError;
+    if (!users || users.length === 0) return [];
+    
+    // Process each user to create a summary
+    const summaries: UserSummary[] = [];
+    
+    for (const user of users) {
+      try {
+        // Get social connections
+        const { data: connections } = await supabase
+          .from('social_connections')
+          .select('*')
+          .eq('user_id', user.id);
+          
+        // Get voiceflow mapping
+        const { data: voiceflow } = await supabase
+          .from('voiceflow_mappings')
+          .select('*')
+          .eq('user_id', user.id);
+          
+        // Get webhook config
+        const { data: webhook } = await supabase
+          .from('webhook_configs')
+          .select('*')
+          .eq('user_id', user.id);
+          
+        // Get conversation count
+        const { count: conversationCount } = await supabase
+          .from('conversations')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', user.id);
+          
+        // Get all conversations for this user
+        const { data: conversations } = await supabase
+          .from('conversations')
+          .select('id')
+          .eq('user_id', user.id);
+        
+        // Get message count if there are conversations
+        let messageCount = 0;
+        if (conversations && conversations.length > 0) {
+          const conversationIds = conversations.map(c => c.id);
+          const { count: msgCount } = await supabase
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .in('conversation_id', conversationIds);
+          
+          messageCount = msgCount || 0;
+        }
+          
+        // Create summary
+        summaries.push({
+          id: user.id,
+          email: user.email,
+          role: user.role || 'customer',
+          created_at: user.created_at,
+          connections: {
+            facebook: connections ? !!connections.some(c => c.fb_page_id) : false,
+            instagram: connections ? !!connections.some(c => c.ig_account_id) : false
+          },
+          voiceflow: voiceflow && voiceflow.length > 0,
+          webhook: webhook && webhook.length > 0,
+          conversationCount: conversationCount || 0,
+          messageCount: messageCount
+        });
+      } catch (userError) {
+        console.error(`Error processing user ${user.id}:`, userError);
+        // Add basic user info even if we can't get all their data
+        summaries.push({
+          id: user.id,
+          email: user.email,
+          role: user.role || 'customer',
+          created_at: user.created_at,
+          connections: { facebook: false, instagram: false },
+          voiceflow: false,
+          webhook: false,
+          conversationCount: 0,
+          messageCount: 0
+        });
+      }
+    }
+    
+    return summaries;
+  } catch (error) {
+    console.error('Error getting user summaries:', error);
+    return [];
+  }
+}
+
+export async function updateUserRole(userId: string, role: string) {
+  try {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+    
+    if (!role) {
+      throw new Error('Role is required');
+    }
+    
+    // Update role in public.users table
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ role })
+      .eq('id', userId);
+      
+    if (updateError) throw updateError;
+    
+    return { id: userId, role };
+  } catch (error) {
+    console.error(`Error updating user role for ${userId}:`, error);
+    throw error;
+  }
 }
