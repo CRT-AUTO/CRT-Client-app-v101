@@ -154,12 +154,56 @@ export async function getVoiceflowMappingByUserId(userId: string) {
       query = query.eq('user_id', userId);
     }
     
-    const { data, error } = await query.maybeSingle();
+    // Use limit(1) and first result instead of maybeSingle to avoid errors with multiple results
+    const { data, error } = await query.limit(1);
 
     if (error) throw error;
-    return data as VoiceflowMapping | null;
+    return data && data.length > 0 ? data[0] as VoiceflowMapping : null;
   } catch (error) {
     console.error(`Error fetching Voiceflow mapping for user ${userId}:`, error);
+    throw error;
+  }
+}
+
+export async function createVoiceflowMapping(mapping: Omit<VoiceflowMapping, 'id' | 'created_at'>) {
+  try {
+    if (!mapping.user_id || !mapping.vf_project_id) {
+      throw new Error('User ID and Voiceflow project ID are required');
+    }
+    
+    const { data, error } = await supabase
+      .from('voiceflow_mappings')
+      .insert([{
+        user_id: mapping.user_id,
+        vf_project_id: mapping.vf_project_id,
+        flowbridge_config: mapping.flowbridge_config || {}
+      }])
+      .select();
+
+    if (error) throw error;
+    return data[0] as VoiceflowMapping;
+  } catch (error) {
+    console.error("Error creating Voiceflow mapping:", error);
+    throw error;
+  }
+}
+
+export async function updateVoiceflowMapping(id: string, mapping: Partial<VoiceflowMapping>) {
+  try {
+    if (!id) {
+      throw new Error('Mapping ID is required to update');
+    }
+    
+    const { data, error } = await supabase
+      .from('voiceflow_mappings')
+      .update(mapping)
+      .eq('id', id)
+      .select();
+
+    if (error) throw error;
+    return data[0] as VoiceflowMapping;
+  } catch (error) {
+    console.error(`Error updating Voiceflow mapping ${id}:`, error);
     throw error;
   }
 }
@@ -181,18 +225,20 @@ export async function getVoiceflowApiKeys() {
 
 export async function getVoiceflowApiKeyByUserId(userId: string) {
   try {
-    if (!userId) {
-      throw new Error('User ID is required');
-    }
-
-    const { data, error } = await supabase
+    let query = supabase
       .from('voiceflow_api_keys')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
+      .select('*');
+      
+    // Only filter by user_id if it's provided
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+    
+    // Use limit(1) instead of maybeSingle to avoid errors with multiple results
+    const { data, error } = await query.limit(1);
 
     if (error) throw error;
-    return data as VoiceflowApiKey | null;
+    return data && data.length > 0 ? data[0] as VoiceflowApiKey : null;
   } catch (error) {
     console.error(`Error fetching Voiceflow API key for user ${userId}:`, error);
     throw error;
@@ -204,16 +250,7 @@ export async function createVoiceflowApiKey(apiKey: Omit<VoiceflowApiKey, 'id' |
     if (!apiKey.user_id || !apiKey.api_key) {
       throw new Error('User ID and API key are required');
     }
-
-    // First check if a key already exists for this user
-    const existingKey = await getVoiceflowApiKeyByUserId(apiKey.user_id);
     
-    if (existingKey) {
-      // Update existing key
-      return await updateVoiceflowApiKey(existingKey.id, { api_key: apiKey.api_key });
-    }
-    
-    // Create new key
     const { data, error } = await supabase
       .from('voiceflow_api_keys')
       .insert([{
@@ -225,7 +262,7 @@ export async function createVoiceflowApiKey(apiKey: Omit<VoiceflowApiKey, 'id' |
     if (error) throw error;
     return data[0] as VoiceflowApiKey;
   } catch (error) {
-    console.error("Error creating/updating Voiceflow API key:", error);
+    console.error("Error creating Voiceflow API key:", error);
     throw error;
   }
 }
@@ -255,83 +292,12 @@ export async function updateVoiceflowApiKey(id: string, apiKey: Partial<Voiceflo
   }
 }
 
-export async function createVoiceflowMapping(mapping: Omit<VoiceflowMapping, 'id' | 'created_at'>) {
-  try {
-    if (!mapping.user_id || !mapping.vf_project_id) {
-      throw new Error('User ID and Voiceflow project ID are required');
-    }
-    
-    // First check if a mapping already exists for this user
-    const existingMapping = await getVoiceflowMappingByUserId(mapping.user_id);
-    
-    if (existingMapping) {
-      // Update existing mapping
-      return await updateVoiceflowMapping(existingMapping.id, {
-        vf_project_id: mapping.vf_project_id,
-        flowbridge_config: mapping.flowbridge_config
-      });
-    }
-    
-    // Create new mapping
-    const { data, error } = await supabase
-      .from('voiceflow_mappings')
-      .insert([{
-        user_id: mapping.user_id,
-        vf_project_id: mapping.vf_project_id,
-        flowbridge_config: mapping.flowbridge_config || {}
-      }])
-      .select();
-
-    if (error) throw error;
-    return data[0] as VoiceflowMapping;
-  } catch (error) {
-    console.error("Error creating/updating Voiceflow mapping:", error);
-    throw error;
-  }
-}
-
-export async function updateVoiceflowMapping(id: string, mapping: Partial<VoiceflowMapping>) {
-  try {
-    if (!id) {
-      throw new Error('Mapping ID is required to update');
-    }
-    
-    const { data, error } = await supabase
-      .from('voiceflow_mappings')
-      .update(mapping)
-      .eq('id', id)
-      .select();
-
-    if (error) throw error;
-    return data[0] as VoiceflowMapping;
-  } catch (error) {
-    console.error(`Error updating Voiceflow mapping ${id}:`, error);
-    throw error;
-  }
-}
-
 // Webhook configs
 export async function getWebhookConfigs() {
   try {
     const { data, error } = await supabase
       .from('webhook_configs')
-      .select(`
-        *,
-        user:users(
-          id,
-          email,
-          role
-        ),
-        voiceflow_mapping:voiceflow_mappings(
-          id,
-          vf_project_id
-        ),
-        social_connections:social_connections(
-          id,
-          fb_page_id,
-          ig_account_id
-        )
-      `);
+      .select('*');
 
     if (error) throw error;
     return data as WebhookConfig[];
@@ -343,35 +309,24 @@ export async function getWebhookConfigs() {
 
 export async function getWebhookConfigByUserId(userId: string, platform?: 'all' | 'facebook' | 'instagram') {
   try {
-    if (!userId) {
-      throw new Error('User ID is required');
-    }
-
     let query = supabase
       .from('webhook_configs')
-      .select(`
-        *,
-        voiceflow_mapping:voiceflow_mappings(
-          id,
-          vf_project_id
-        ),
-        social_connections:social_connections(
-          id,
-          fb_page_id,
-          ig_account_id,
-          access_token
-        )
-      `)
-      .eq('user_id', userId);
+      .select('*');
+      
+    // Only filter by user_id if it's provided
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
       
     if (platform) {
       query = query.eq('platform', platform);
     }
     
-    const { data, error } = await query.maybeSingle();
+    // Use limit(1) instead of maybeSingle to avoid errors with multiple results
+    const { data, error } = await query.limit(1);
 
     if (error) throw error;
-    return data as WebhookConfig | null;
+    return data && data.length > 0 ? data[0] as WebhookConfig : null;
   } catch (error) {
     console.error(`Error fetching webhook config for user ${userId}:`, error);
     throw error;
@@ -380,26 +335,16 @@ export async function getWebhookConfigByUserId(userId: string, platform?: 'all' 
 
 export async function getWebhookConfigsByUserId(userId: string) {
   try {
-    if (!userId) {
-      throw new Error('User ID is required');
+    let query = supabase
+      .from('webhook_configs')
+      .select('*');
+      
+    // Only filter by user_id if it's provided
+    if (userId) {
+      query = query.eq('user_id', userId);
     }
 
-    const { data, error } = await supabase
-      .from('webhook_configs')
-      .select(`
-        *,
-        voiceflow_mapping:voiceflow_mappings(
-          id,
-          vf_project_id
-        ),
-        social_connections:social_connections(
-          id,
-          fb_page_id,
-          ig_account_id,
-          access_token
-        )
-      `)
-      .eq('user_id', userId);
+    const { data, error } = await query;
 
     if (error) throw error;
     return data as WebhookConfig[];
@@ -414,22 +359,7 @@ export async function createWebhookConfig(config: Omit<WebhookConfig, 'id' | 'cr
     if (!config.user_id) {
       throw new Error('User ID is required to create a webhook config');
     }
-
-    // Check if a webhook config already exists for this user and platform
-    const existingConfig = await getWebhookConfigByUserId(config.user_id, config.platform);
     
-    if (existingConfig) {
-      // Update existing config
-      return await updateWebhookConfig(existingConfig.id, {
-        webhook_url: config.webhook_url,
-        verification_token: config.verification_token,
-        is_active: config.is_active,
-        webhook_name: config.webhook_name,
-        generated_url: config.generated_url
-      });
-    }
-    
-    // Create new config
     const { data, error } = await supabase
       .from('webhook_configs')
       .insert([{
@@ -466,19 +396,7 @@ export async function updateWebhookConfig(id: string, config: Partial<WebhookCon
       .from('webhook_configs')
       .update(updateData)
       .eq('id', id)
-      .select(`
-        *,
-        voiceflow_mapping:voiceflow_mappings(
-          id,
-          vf_project_id
-        ),
-        social_connections:social_connections(
-          id,
-          fb_page_id,
-          ig_account_id,
-          access_token
-        )
-      `);
+      .select();
 
     if (error) throw error;
     return data[0] as WebhookConfig;
@@ -703,20 +621,20 @@ export async function trackApiCall(userId: string, platform: string, endpoint: s
       .eq('platform', platform)
       .eq('endpoint', endpoint)
       .gte('reset_at', today.toISOString())
-      .single();
+      .limit(1);
     
     if (checkError && checkError.code !== 'PGRST116') { // PGRST116 is "not found" error, which is expected
       throw checkError;
     }
       
-    if (existingData) {
+    if (existingData && existingData.length > 0) {
       // Update existing record
       const { data, error } = await supabase
         .from('api_rate_limits')
         .update({
-          calls_made: existingData.calls_made + 1
+          calls_made: existingData[0].calls_made + 1
         })
-        .eq('id', existingData.id)
+        .eq('id', existingData[0].id)
         .select();
         
       if (error) throw error;
@@ -761,14 +679,14 @@ export async function checkRateLimit(userId: string, platform: string, endpoint:
       .eq('platform', platform)
       .eq('endpoint', endpoint)
       .gte('reset_at', today.toISOString())
-      .single();
+      .limit(1);
       
-    if (error && error.code !== 'PGRST116') { // PGRST116 is not found error
+    if (error) {
       throw error;
     }
     
     // If no data or calls_made < limit, we're good
-    if (!data || data.calls_made < limit) {
+    if (!data || data.length === 0 || data[0].calls_made < limit) {
       return true;
     }
     
