@@ -3,10 +3,21 @@
 const { createClient } = require('@supabase/supabase-js');
 const { retryWithBackoff, isTransientError } = require('./error-recovery');
 
-// Initialize Supabase client
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+// Initialize Supabase client with error handling
+let supabase = null;
+try {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+  
+  if (supabaseUrl && supabaseServiceKey) {
+    supabase = createClient(supabaseUrl, supabaseServiceKey);
+    console.log("Supabase client initialized successfully in session manager");
+  } else {
+    console.warn(`Missing Supabase credentials in session-manager.js. URL: ${supabaseUrl ? 'Present' : 'Missing'}, Service Key: ${supabaseServiceKey ? 'Present' : 'Missing'}`);
+  }
+} catch (error) {
+  console.error('Error initializing Supabase client in session-manager.js:', error);
+}
 
 // Session expiry time in hours - very long duration for persistent sessions
 const SESSION_EXPIRY_HOURS = 8760; // 365 days
@@ -21,6 +32,10 @@ const SESSION_EXPIRY_HOURS = 8760; // 365 days
  */
 async function getOrCreateSession(userId, participantId, platform) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     // CHANGE: Don't filter by expiry date - always get the latest session
     // for this user/participant, regardless of expiry
     const { data: existingSessions, error } = await supabase
@@ -76,6 +91,10 @@ async function getOrCreateSession(userId, participantId, platform) {
  */
 async function updateSessionContext(sessionId, contextUpdates) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     // First get the current context
     const { data: session, error } = await supabase
       .from('user_sessions')
@@ -149,6 +168,10 @@ async function updateSessionContext(sessionId, contextUpdates) {
  */
 async function getSession(sessionId) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     const { data, error } = await supabase
       .from('user_sessions')
       .select('*')
@@ -172,6 +195,10 @@ async function getSession(sessionId) {
  */
 async function linkSessionToConversation(conversationId, sessionId) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     const { error } = await supabase
       .from('conversations')
       .update({ session_id: sessionId })
@@ -194,6 +221,10 @@ async function linkSessionToConversation(conversationId, sessionId) {
  */
 async function extendSession(sessionId, hours = SESSION_EXPIRY_HOURS) {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     const expiryDate = new Date();
     expiryDate.setHours(expiryDate.getHours() + hours);
     
@@ -221,6 +252,10 @@ async function extendSession(sessionId, hours = SESSION_EXPIRY_HOURS) {
  */
 async function cleanupExpiredSessions() {
   try {
+    if (!supabase) {
+      throw new Error('Database connection not available');
+    }
+    
     const now = new Date().toISOString();
     
     const { data, error } = await supabase
@@ -248,6 +283,13 @@ async function cleanupExpiredSessions() {
  */
 async function prepareVoiceflowContext(sessionId, additionalContext = {}) {
   try {
+    if (!supabase) {
+      return {
+        ...additionalContext,
+        error: 'Database connection not available'
+      };
+    }
+    
     // Get the session
     const session = await getSession(sessionId);
     
