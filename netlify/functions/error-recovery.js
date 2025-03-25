@@ -93,6 +93,12 @@ function isTransientError(error) {
     return true;
   }
   
+  // Database connection errors
+  if (error.message?.includes('Database connection') ||
+      error.message?.includes('not available')) {
+    return true;
+  }
+  
   return false;
 }
 
@@ -109,8 +115,15 @@ async function saveToDeadLetterQueue(userId, message, errorMessage, metadata = {
   try {
     const { createClient } = require('@supabase/supabase-js');
     
+    // Initialize Supabase with error handling
     const supabaseUrl = process.env.VITE_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+    
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.error('Missing Supabase credentials for dead letter queue');
+      return { success: false, error: 'Missing database credentials' };
+    }
+    
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
     // Save to dead letter table (which would need to be created)
