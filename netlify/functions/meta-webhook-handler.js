@@ -35,9 +35,8 @@ const verificationHandler = require('./meta-webhook-verification');
 
 /**
  * Core message processing function.
- * This function implements your message processing workflow including:
- * - Finding social connections, session creation, and conversation management
- * - Voiceflow API integration and error recovery
+ * Implements your workflow: social connection lookup, session & conversation management,
+ * Voiceflow API integration, error recovery, and sending a response back via Meta API.
  */
 async function processMessage(userId, platform, senderId, recipientId, message, timestamp) {
   try {
@@ -115,10 +114,10 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
     // Link session to conversation if needed
     await linkSessionToConversation(conversationId, session.id);
 
-    // Process the incoming message
+    // Process the incoming message from Meta
     const processedMessage = processMetaMessage(message, platform);
 
-    // Store the incoming user message
+    // Save the incoming user message
     const saveUserMessage = async () => {
       const { data, error } = await supabase
         .from('messages')
@@ -173,9 +172,7 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
       initialDelay: 300,
       shouldRetry: (error) => isTransientError(error)
     });
-    if (!apiKey) {
-      throw new Error('No Voiceflow API key found');
-    }
+    if (!apiKey) throw new Error('No Voiceflow API key found');
 
     // Prepare context and Voiceflow request
     const baseContext = {
@@ -211,7 +208,6 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
         maxDelay: 5000,
         shouldRetry: (error) => isTransientError(error) || (error.response && error.response.status >= 500)
       });
-
       // Extract context updates from Voiceflow response and update session context
       const contextUpdates = extractContextFromVoiceflowResponse(voiceflowResponse.data);
       if (Object.keys(contextUpdates).length > 0) {
@@ -299,7 +295,7 @@ async function processMessage(userId, platform, senderId, recipientId, message, 
 }
 
 /**
- * Extract context variables from Voiceflow response.
+ * Extract context updates from Voiceflow response.
  * @param {Array} voiceflowResponse Response array from Voiceflow API.
  * @returns {Object} Context updates.
  */
@@ -324,5 +320,147 @@ function extractContextFromVoiceflowResponse(voiceflowResponse) {
   return contextUpdates;
 }
 
-// Export processMessage for use in process-message-queue.js
+// === Main exported handler function for Netlify ===
+exports.handler = async (event, context) => {
+  // Set common CORS headers
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Hub-Signature, X-Hub-Signature-256',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+  };
+
+  // Handle preflight requests
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers };
+  }
+
+  // Delegate GET requests to the verification handler
+  if (event.httpMethod === 'GET') {
+    return await verificationHandler.handler(event, context);
+  }
+
+  // Only allow POST requests
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ error: 'Method not allowed. Please use POST for webhook events.' })
+    };
+  }
+
+  // Enhanced webhook security validation
+  const body = event.body;
+  const appSecret = process.env.META_APP_SECRET;
+  if (appSecret) {
+    const validationResult = validateWebhook(event.headers, body, appSecret);
+    if (!validationResult.valid) {
+      console.error('Invalid webhook signature:', validationResult.message);
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({ error: 'Invalid webhook signature', details: validationResult.message })
+      };
+    }
+    console.log('Webhook signature verified using:', validationResult.method);
+  } else {
+    console.warn('No META_APP_SECRET environment variable set. Skipping signature validation!');
+  }
+
+  // Extract path parameters: expected format /api/webhooks/{userId}/{platform}/{timestamp}
+  const pathSegments = event.path.split('/');
+  let userId = null;
+  let platform = null;
+  if (pathSegments.length >= 5 && pathSegments[2] === 'webhooks') {
+    userId = pathSegments[3];
+    platform = pathSegments[4];
+  }
+  if (!userId || !platform) {
+    console.error('Missing userId or platform in webhook URL:', event.path);
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'Invalid webhook URL format. Expected /api/webhooks/{userId}/{platform}/{timestamp}' })
+    };
+  }
+  if (platform !== 'facebook' && platform !== 'instagram') {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'Invalid platform. Expected "facebook" or "instagram".' })
+    };
+  }
+
+  // Process the webhook event payload
+  try {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch (e) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Invalid request body. JSON parsing failed.' })
+      };
+    }
+    if (!data.object || (data.object !== 'page' && data.object !== 'instagram')) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ status: 'ignored', message: 'Not a messaging webhook event' })
+      };
+    }
+    console.log('Received webhook event:', JSON.stringify(data, null, 2));
+
+    // Process each entry in the payload
+    const queueResults = [];
+    for (const entry of data.entry) {
+      const messagingEvents = entry.messaging || entry.changes;
+      if (!messagingEvents) continue;
+      for (const evt of messagingEvents) {
+        if (platform === 'instagram' && evt.field === 'messages') {
+          const value = evt.value;
+          const { senderId, recipientId, message, timestamp } = processInstagramMessage(value);
+          const queueResult = await queueMessage(userId, platform, senderId, recipientId, message, timestamp);
+          queueResults.push({ success: true, queueId: queueResult.id, platform: 'instagram' });
+        } else if (platform === 'facebook' && evt.message && !evt.message.is_echo) {
+          const senderId = evt.sender.id;
+          const recipientId = evt.recipient.id;
+          const timestamp = evt.timestamp;
+          const queueResult = await queueMessage(userId, platform, senderId, recipientId, evt.message, timestamp);
+          queueResults.push({ success: true, queueId: queueResult.id, platform: 'facebook', type: 'message' });
+        } else if (platform === 'facebook' && evt.postback) {
+          const senderId = evt.sender.id;
+          const recipientId = evt.recipient.id;
+          const timestamp = evt.timestamp;
+          const postbackMessage = { mid: `postback-${Date.now()}`, postback: evt.postback };
+          const queueResult = await queueMessage(userId, platform, senderId, recipientId, postbackMessage, timestamp);
+          queueResults.push({ success: true, queueId: queueResult.id, platform: 'facebook', type: 'postback' });
+        }
+      }
+    }
+
+    // Optionally process some messages immediately
+    const processingResults = await processPendingMessages(processMessage, 2);
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ 
+        status: 'success',
+        message: 'Webhook events received and queued for processing',
+        queued: queueResults.length,
+        processed: processingResults.processed
+      })
+    };
+
+  } catch (error) {
+    console.error('Error handling webhook event:', error);
+    return {
+      statusCode: 200, // Return 200 to avoid Meta retrying
+      headers,
+      body: JSON.stringify({ status: 'error', message: 'Error processing webhook', error: error.message })
+    };
+  }
+};
+
+// Also export processMessage for use in process-message-queue.js
 exports.processMessage = processMessage;
